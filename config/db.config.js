@@ -1,6 +1,6 @@
 module.exports = {
     DB: process.env.DB_NAME || 'dev_astropulse',
-    USER:  process.env.DB_USER || 'root',
+    USER:  process.env.DB_USER || 'astro_user',
     PASSWORD: process.env.DB_PSSWORD || 'admin',
     PORT: process.env.DB_PORT || 3306,
     HOST: process.env.DB_HOST || '127.0.0.1',

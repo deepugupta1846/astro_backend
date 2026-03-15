@@ -37,7 +37,9 @@ const connectDb = async() => {
 
 
 //set all routes
-
+app.get("/", (req, res) => {
+  res.send("AstroPulse API running");
+});
 require("./src/user/routes/user.routes.js")(app);
 
 
@@ -45,7 +47,7 @@ require("./src/user/routes/user.routes.js")(app);
 const startServer = async() => {
     try {
         await connectDb()
-        app.listen(PORT, () => {
+        app.listen(PORT, "0.0.0.0", () => {
             console.log(`Server is running on http://localhost:${PORT}`);
         });
     } catch (error) {
