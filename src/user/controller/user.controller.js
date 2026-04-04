@@ -1,9 +1,23 @@
 const db = require("../../../models");
 const User = db.user;
 
-// In-memory OTP store (use Redis/cache in production). Key: phone, Value: { otp, expiresAt }
+// In-memory OTP (use Redis/SMS provider in production). Key: phone (trimmed digits)
 const otpStore = new Map();
 const OTP_EXPIRY_SEC = 300;
+
+async function findOrCreateUserByPhone(normalizedPhone, countryCode) {
+  let user = await User.findOne({ where: { phone: normalizedPhone } });
+  let existingUser = false;
+  if (!user) {
+    user = await User.create({
+      phone: normalizedPhone,
+      countryCode: String(countryCode || "+91").trim() || "+91",
+    });
+  } else {
+    existingUser = true;
+  }
+  return { user, existingUser };
+}
 
 /**
  * Send OTP to phone (for signup/login)
@@ -19,12 +33,12 @@ exports.sendOtp = async (req, res) => {
       });
     }
 
-    const normalizedPhone = phone.trim();
+    const normalizedPhone = String(phone).trim();
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + OTP_EXPIRY_SEC * 1000;
     otpStore.set(normalizedPhone, { otp, expiresAt });
 
-    // In production: send OTP via SMS gateway. For now just return success.
+    // Integrate SMS gateway later. _devOtp only in non-production for testing.
     res.status(200).json({
       success: true,
       message: "OTP sent successfully",
@@ -44,16 +58,23 @@ exports.sendOtp = async (req, res) => {
  */
 exports.verifyOtp = async (req, res) => {
   try {
-    const { phone, countryCode = "+91", otp } = req.body;
+    const { phone, countryCode = "+91", otp, signupIntent } = req.body;
 
-    if (!phone || !otp) {
+    if (!phone || !String(phone).trim()) {
       return res.status(400).json({
         success: false,
-        message: "Phone and OTP are required",
+        message: "Phone number is required",
       });
     }
 
-    const normalizedPhone = phone.trim();
+    if (otp == null || String(otp).trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "OTP is required",
+      });
+    }
+
+    const normalizedPhone = String(phone).trim();
     const otpStr = String(otp).trim();
     if (otpStr.length !== 6 || !/^\d+$/.test(otpStr)) {
       return res.status(400).json({
@@ -62,47 +83,60 @@ exports.verifyOtp = async (req, res) => {
       });
     }
 
-    const stored = otpStore.get(normalizedPhone);
-    if (!stored) {
-      return res.status(400).json({
-        success: false,
-        message: "OTP expired or not sent. Please request a new OTP.",
-      });
-    }
-    if (Date.now() > stored.expiresAt) {
+    const masterRaw = process.env.MASTER_OTP;
+    const masterOtp =
+      masterRaw != null && String(masterRaw).trim() !== ""
+        ? String(masterRaw).trim()
+        : null;
+    const usedMasterOtp = Boolean(masterOtp && otpStr === masterOtp);
+
+    if (!usedMasterOtp) {
+      const stored = otpStore.get(normalizedPhone);
+      if (!stored) {
+        return res.status(400).json({
+          success: false,
+          message: "OTP expired or not sent. Request a new OTP.",
+        });
+      }
+      if (Date.now() > stored.expiresAt) {
+        otpStore.delete(normalizedPhone);
+        return res.status(400).json({
+          success: false,
+          message: "OTP expired. Request a new OTP.",
+        });
+      }
+      if (stored.otp !== otpStr) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+        });
+      }
       otpStore.delete(normalizedPhone);
-      return res.status(400).json({
-        success: false,
-        message: "OTP expired. Please request a new OTP.",
-      });
-    }
-    if (stored.otp !== otpStr) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP",
-      });
-    }
-    otpStore.delete(normalizedPhone);
-
-    // Find or create user by phone
-    let user = await User.findOne({ where: { phone: normalizedPhone } });
-    let existingUser = false;
-
-    if (!user) {
-      user = await User.create({
-        phone: normalizedPhone,
-        countryCode: countryCode.trim() || "+91",
-      });
-    } else {
-      existingUser = true; // Mobile number already exists → sign in
     }
 
-    const userResponse = toUserResponse(user);
+    const { user, existingUser } = await findOrCreateUserByPhone(
+      normalizedPhone,
+      countryCode
+    );
+
+    let responseUser = user;
+    if (String(signupIntent || "").toLowerCase() === "astrologer") {
+      if (user.role !== "admin") {
+        await user.update({ role: "astrologer" });
+      }
+      responseUser = await User.findByPk(user.id);
+    }
 
     res.status(200).json({
       success: true,
-      message: "OTP verified successfully",
-      data: { user: userResponse, existingUser },
+      message: usedMasterOtp
+        ? "OTP verified successfully (master)"
+        : "OTP verified successfully",
+      data: {
+        user: toUserResponse(responseUser),
+        existingUser,
+        ...(usedMasterOtp && { usedMasterOtp: true }),
+      },
     });
   } catch (error) {
     res.status(500).json({
@@ -264,6 +298,9 @@ function toUserResponse(user) {
   return u;
 }
 
+/** For astrologer register and other modules */
+exports.toUserResponse = toUserResponse;
+
 /**
  * Get all users
  */
@@ -337,20 +374,22 @@ exports.update = async (req, res) => {
       payload.languages = JSON.stringify(payload.languages);
     }
 
-    const [updated] = await User.update(payload, { where: { id } });
-
-    if (!updated) {
+    const user = await User.findByPk(id);
+    if (!user) {
       return res.status(404).json({
         success: false,
-        message: "User not found or no changes made",
+        message: "User not found",
       });
     }
 
-    const user = await User.findByPk(id, { attributes: { exclude: ["password"] } });
+    await user.update(payload);
+    const refreshed = await User.findByPk(id, {
+      attributes: { exclude: ["password"] },
+    });
     res.status(200).json({
       success: true,
       message: "User updated successfully",
-      data: user ? toUserResponse(user) : null,
+      data: refreshed ? toUserResponse(refreshed) : null,
     });
   } catch (error) {
     res.status(500).json({

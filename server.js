@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 console.log("Server is starting...");
 
 const express = require('express');
@@ -27,9 +29,20 @@ if (!fs.existsSync(uploadsDir)) {
 const connectDb = async() => {
     try {
         await db.sequelize.authenticate();
-        // Sync models (creates tables if they don't exist)
-        await db.sequelize.sync();
+        // sync() alone does NOT add new columns to existing tables.
+        // alter: true updates the schema to match models (adds profileImageUrl, etc.).
+        const useAlter =
+            process.env.DB_SYNC_ALTER === "true" ||
+            (process.env.NODE_ENV !== "production" &&
+                process.env.DB_SYNC_ALTER !== "false");
+        // await db.sequelize.sync(useAlter ? { alter: true } : {});
         console.log("Database connection established successfully.");
+        if (useAlter) {
+            console.log(
+                "DB sync: alter enabled (missing columns will be added). " +
+                    "Production: set DB_SYNC_ALTER=true once, or run SQL in scripts/migrations/."
+            );
+        }
     } catch (error) {
         console.log("Unable to connect database.", error.message);
     }
@@ -38,7 +51,10 @@ const connectDb = async() => {
 
 //set all routes
 
+require("./src/upload/upload.routes.js")(app);
 require("./src/user/routes/user.routes.js")(app);
+require("./src/astrologer/routes/astrologer.routes.js")(app);
+require("./src/consultation/routes/consultation.routes.js")(app);
 
 
 

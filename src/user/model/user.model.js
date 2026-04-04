@@ -1,4 +1,9 @@
 module.exports = (sequelize, Sequelize) => {
+  // Sequelize attribute is profileImageUrl; MySQL often stores snake_case.
+  // Error "Unknown column 'profileImageUrl'" = DB uses a different name.
+  const profileImageDbColumn =
+    process.env.USER_PROFILE_IMAGE_DB_COLUMN || "profile_image_url";
+
   const User = sequelize.define(
     "User",
     {
@@ -32,6 +37,12 @@ module.exports = (sequelize, Sequelize) => {
       name: {
         type: Sequelize.STRING,
         allowNull: true,
+      },
+      profileImageUrl: {
+        type: Sequelize.STRING(500),
+        allowNull: true,
+        field: profileImageDbColumn,
+        comment: "Public URL to profile photo",
       },
       gender: {
         type: Sequelize.ENUM("male", "female", "other"),
