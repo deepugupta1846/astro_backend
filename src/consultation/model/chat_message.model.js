@@ -24,7 +24,19 @@ module.exports = (sequelize, Sequelize) => {
       messageType: {
         type: Sequelize.STRING(20),
         defaultValue: "text",
-        comment: "text | system",
+        comment: "text | image | system",
+      },
+      deliveredAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "delivered_at",
+        comment: "Recipient device acknowledged delivery",
+      },
+      readAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "read_at",
+        comment: "Recipient opened thread / read receipt",
       },
     },
     {
