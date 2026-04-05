@@ -5,6 +5,7 @@ const {
   broadcastChatMessage,
   broadcastMessageStatus,
   broadcastConversationRead,
+  broadcastIncomingCall,
 } = require("../consultation.realtime");
 
 const ConsultationSession = db.consultationSession;
@@ -683,6 +684,16 @@ exports.startCall = async (req, res) => {
     const log = await CallLog.create({
       sessionId,
       channelName: session.channelName,
+      callType,
+      startedByUserId: starter,
+    });
+
+    const calleeUserId =
+      starter === session.customerUserId
+        ? session.astrologerUserId
+        : session.customerUserId;
+    broadcastIncomingCall(session, calleeUserId, {
+      callLogId: log.id,
       callType,
       startedByUserId: starter,
     });

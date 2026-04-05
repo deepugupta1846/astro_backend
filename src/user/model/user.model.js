@@ -89,6 +89,13 @@ module.exports = (sequelize, Sequelize) => {
         type: Sequelize.ENUM("user", "admin", "astrologer"),
         defaultValue: "user",
       },
+      walletBalance: {
+        type: Sequelize.DECIMAL(12, 2),
+        allowNull: false,
+        defaultValue: 0,
+        field: "wallet_balance",
+        comment: "In-app wallet (INR)",
+      },
       isActive: {
         type: Sequelize.BOOLEAN,
         defaultValue: true,

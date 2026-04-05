@@ -47,3 +47,17 @@ exports.broadcastConversationRead = (sessionId, payload) => {
     io.to(userRoom(a)).emit("inbox_updated", { sessionId });
   }
 };
+
+/**
+ * Notify the callee that the other participant started a voice/video call.
+ * Uses user room so the callee receives it even when not in join_consultation.
+ */
+exports.broadcastIncomingCall = (session, calleeUserId, payload) => {
+  if (!io || !session || !calleeUserId) return;
+  const sid = session.id;
+  io.to(userRoom(calleeUserId)).emit("incoming_call", {
+    sessionId: sid,
+    channelName: String(session.channelName || ""),
+    ...payload,
+  });
+};
