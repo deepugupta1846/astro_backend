@@ -280,9 +280,9 @@ exports.listSessionsForParticipant = async (req, res) => {
     const unreadRows =
       sessionIds.length > 0
         ? await db.sequelize.query(
-            `SELECT session_id AS sessionId, COUNT(*) AS cnt FROM chat_messages
-             WHERE session_id IN (${placeholders}) AND sender_user_id != ? AND read_at IS NULL
-             GROUP BY session_id`,
+            `SELECT sessionId, COUNT(*) AS cnt FROM chat_messages
+             WHERE sessionId IN (${placeholders}) AND senderUserId != ? AND read_at IS NULL
+             GROUP BY sessionId`,
             {
               replacements: [...sessionIds, userId],
               type: QueryTypes.SELECT,
