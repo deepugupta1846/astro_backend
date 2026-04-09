@@ -7,6 +7,7 @@ const {
   broadcastConversationRead,
   broadcastIncomingCall,
 } = require("../consultation.realtime");
+const { sendPushToUser } = require("../../notifications/push.service");
 
 const ConsultationSession = db.consultationSession;
 const ChatMessage = db.chatMessage;
@@ -492,6 +493,30 @@ exports.sendMessage = async (req, res) => {
     const payload = messageToJson(msg);
     broadcastChatMessage(session, payload);
 
+    const recipientId =
+      sid === session.customerUserId
+        ? session.astrologerUserId
+        : session.customerUserId;
+    const [senderUser, recipientUser] = await Promise.all([
+      User.findByPk(sid, { attributes: ["id", "name"] }),
+      User.findByPk(recipientId, { attributes: ["id", "fcmToken"] }),
+    ]);
+    const senderName =
+      senderUser?.name && String(senderUser.name).trim()
+        ? String(senderUser.name).trim()
+        : "New message";
+    const bodyPreview =
+      messageType === "image" ? "sent you a photo" : text.slice(0, 100);
+    await sendPushToUser(recipientUser, {
+      title: senderName,
+      body: bodyPreview,
+      data: {
+        type: "chat_message",
+        sessionId: String(session.id),
+        senderUserId: String(sid),
+      },
+    });
+
     res.status(201).json({
       success: true,
       data: payload,
@@ -696,6 +721,26 @@ exports.startCall = async (req, res) => {
       callLogId: log.id,
       callType,
       startedByUserId: starter,
+    });
+
+    const [callerUser, calleeUser] = await Promise.all([
+      User.findByPk(starter, { attributes: ["id", "name"] }),
+      User.findByPk(calleeUserId, { attributes: ["id", "fcmToken"] }),
+    ]);
+    const callerName =
+      callerUser?.name && String(callerUser.name).trim()
+        ? String(callerUser.name).trim()
+        : "Astro Pulse";
+    await sendPushToUser(calleeUser, {
+      title: `${callerName} is calling`,
+      body: callType === "video" ? "Incoming video call" : "Incoming voice call",
+      data: {
+        type: "incoming_call",
+        sessionId: String(session.id),
+        callLogId: String(log.id),
+        callType: String(callType),
+        startedByUserId: String(starter),
+      },
     });
 
     res.status(201).json({

@@ -288,6 +288,7 @@ exports.login = async (req, res) => {
 function toUserResponse(user) {
   const u = user.toJSON ? user.toJSON() : user;
   delete u.password;
+  delete u.fcmToken;
   if (u.languages && typeof u.languages === "string") {
     try {
       u.languages = JSON.parse(u.languages);
@@ -300,6 +301,40 @@ function toUserResponse(user) {
 
 /** For astrologer register and other modules */
 exports.toUserResponse = toUserResponse;
+
+/**
+ * PUT /api/v1/user/:id/push-token
+ * Body: { token, platform?: 'android' | 'ios' | 'web' }
+ */
+exports.updatePushToken = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const token = String(req.body?.token || "").trim();
+    if (!id || !token) {
+      return res.status(400).json({
+        success: false,
+        message: "id and token are required",
+      });
+    }
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+    await user.update({
+      fcmToken: token.slice(0, 512),
+      fcmTokenUpdatedAt: new Date(),
+    });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error updating push token",
+    });
+  }
+};
 
 /**
  * Get all users
