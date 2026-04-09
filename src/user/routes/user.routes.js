@@ -6,6 +6,7 @@ module.exports = (app) => {
   app.post("/api/v1/user/verify-otp", userController.verifyOtp);
   app.post("/api/v1/user/signup", userController.signup);
   app.post("/api/v1/user/signin", userController.login);
+  app.put("/api/v1/user/:id/push-token", userController.updatePushToken);
 
   // CRUD
   app.get("/api/v1/user", userController.findAll);

@@ -96,6 +96,17 @@ module.exports = (sequelize, Sequelize) => {
         field: "wallet_balance",
         comment: "In-app wallet (INR)",
       },
+      fcmToken: {
+        type: Sequelize.STRING(512),
+        allowNull: true,
+        field: "fcm_token",
+        comment: "Latest device token for Firebase push",
+      },
+      fcmTokenUpdatedAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "fcm_token_updated_at",
+      },
       isActive: {
         type: Sequelize.BOOLEAN,
         defaultValue: true,
