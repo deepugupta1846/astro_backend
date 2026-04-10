@@ -4,17 +4,24 @@ async function sendPushToUser(user, payload) {
   const token = user?.fcmToken;
   if (!token) return { ok: false, skipped: true, reason: "missing_token" };
 
+  const data = payload?.data || {};
+  const isIncomingVideo =
+    data.type === "incoming_call" && String(data.callType || "").toLowerCase() === "video";
+  const androidChannelId = isIncomingVideo
+    ? "astro_pulse_video_calls"
+    : "astro_pulse_messages";
+
   const message = {
     token,
     notification: {
       title: payload?.title || "Astro Pulse",
       body: payload?.body || "",
     },
-    data: payload?.data || {},
+    data,
     android: {
       priority: "high",
       notification: {
-        channelId: "astro_pulse_messages",
+        channelId: androidChannelId,
       },
     },
   };

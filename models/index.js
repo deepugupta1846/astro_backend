@@ -52,5 +52,7 @@ db.consultationSession.belongsTo(db.user, {
   as: "astrologerUser",
 });
 db.chatMessage.belongsTo(db.consultationSession, { foreignKey: "sessionId" });
+db.callLog.belongsTo(db.consultationSession, { foreignKey: "sessionId" });
+db.consultationSession.hasMany(db.callLog, { foreignKey: "sessionId" });
 
 module.exports = db;

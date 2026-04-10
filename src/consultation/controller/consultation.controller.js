@@ -6,6 +6,7 @@ const {
   broadcastMessageStatus,
   broadcastConversationRead,
   broadcastIncomingCall,
+  broadcastCallEnded,
 } = require("../consultation.realtime");
 const { sendPushToUser } = require("../../notifications/push.service");
 
@@ -756,6 +757,100 @@ exports.startCall = async (req, res) => {
 };
 
 /**
+ * GET /api/v1/consultation/calls/history/:userId?limit=50
+ * Completed calls (voice/video) for sessions this user participates in.
+ */
+exports.listCallHistory = async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "userId required" });
+    }
+
+    const rows = await CallLog.findAll({
+      attributes: [
+        "id",
+        "sessionId",
+        "callType",
+        "startedByUserId",
+        "endedAt",
+        "createdAt",
+        "durationSeconds",
+      ],
+      where: { endedAt: { [Op.ne]: null } },
+      include: [
+        {
+          model: ConsultationSession,
+          required: true,
+          attributes: ["id", "customerUserId", "astrologerUserId", "astrologerId"],
+          where: {
+            [Op.or]: [{ customerUserId: userId }, { astrologerUserId: userId }],
+          },
+          include: [
+            { model: User, as: "customer", attributes: ["id", "name"] },
+            { model: User, as: "astrologerUser", attributes: ["id", "name"] },
+          ],
+        },
+      ],
+      order: [["endedAt", "DESC"]],
+      limit,
+      subQuery: false,
+    });
+
+    const data = rows.map((row) => {
+      const plain = row.get({ plain: true });
+      const session = plain.consultationSession || plain.ConsultationSession;
+      const {
+        consultationSession: _s1,
+        ConsultationSession: _s2,
+        ...log
+      } = plain;
+      const cust = session?.customer;
+      const astro = session?.astrologerUser;
+      const isCustomer = session && session.customerUserId === userId;
+      const peer = isCustomer ? astro : cust;
+      const peerName =
+        peer && peer.name && String(peer.name).trim()
+          ? String(peer.name).trim()
+          : `User #${peer?.id ?? "?"}`;
+      const direction =
+        log.startedByUserId === userId ? "outgoing" : "incoming";
+      let durationSeconds = log.durationSeconds;
+      if (durationSeconds == null && log.endedAt && log.createdAt) {
+        durationSeconds = Math.max(
+          0,
+          Math.floor(
+            (new Date(log.endedAt) - new Date(log.createdAt)) / 1000
+          )
+        );
+      }
+
+      return {
+        id: log.id,
+        sessionId: log.sessionId,
+        astrologerId: session?.astrologerId ?? null,
+        callType: log.callType,
+        startedByUserId: log.startedByUserId,
+        startedAt: log.createdAt,
+        endedAt: log.endedAt,
+        durationSeconds,
+        direction,
+        peerUserId: peer?.id ?? null,
+        peerName,
+      };
+    });
+
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error loading call history",
+    });
+  }
+};
+
+/**
  * PATCH /api/v1/consultation/calls/:callLogId/end
  */
 exports.endCall = async (req, res) => {
@@ -765,8 +860,37 @@ exports.endCall = async (req, res) => {
     if (!log) {
       return res.status(404).json({ success: false, message: "Call not found" });
     }
-    await log.update({ endedAt: new Date() });
-    res.status(200).json({ success: true, data: { id: log.id, endedAt: log.endedAt } });
+    if (!log.endedAt) {
+      const ended = new Date();
+      const created = new Date(log.createdAt);
+      const durationSeconds = Math.max(
+        0,
+        Math.floor((ended - created) / 1000)
+      );
+      await log.update({ endedAt: ended, durationSeconds });
+      await log.reload();
+      const session = await ConsultationSession.findByPk(log.sessionId);
+      if (session) {
+        broadcastCallEnded(session, { callLogId: log.id });
+      }
+    }
+    let durationSeconds = log.durationSeconds;
+    if (durationSeconds == null && log.endedAt && log.createdAt) {
+      durationSeconds = Math.max(
+        0,
+        Math.floor(
+          (new Date(log.endedAt) - new Date(log.createdAt)) / 1000
+        )
+      );
+    }
+    res.status(200).json({
+      success: true,
+      data: {
+        id: log.id,
+        endedAt: log.endedAt,
+        durationSeconds,
+      },
+    });
   } catch (error) {
     res.status(500).json({
       success: false,

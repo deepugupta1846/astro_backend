@@ -27,6 +27,12 @@ module.exports = (sequelize, Sequelize) => {
         type: Sequelize.DATE,
         allowNull: true,
       },
+      durationSeconds: {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+        field: "duration_seconds",
+        comment: "Call length in seconds (set when call ends)",
+      },
     },
     {
       timestamps: true,

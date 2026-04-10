@@ -35,7 +35,7 @@ const connectDb = async () => {
       (process.env.NODE_ENV !== "production" &&
         process.env.DB_SYNC_ALTER !== "false");
     console.log("Database connection established successfully.");
-    await db.sequelize.sync(useAlter ? { alter: true } : {});
+    // await db.sequelize.sync(useAlter ? { alter: true } : {});
     if (useAlter) {
       console.log(
         "DB sync: alter enabled (missing columns will be added). " +

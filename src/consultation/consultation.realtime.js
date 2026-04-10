@@ -61,3 +61,20 @@ exports.broadcastIncomingCall = (session, calleeUserId, payload) => {
     ...payload,
   });
 };
+
+/**
+ * Notify both participants that a call ended (either side hung up).
+ * Emits to the session room and both user rooms so clients tear down Agora even if
+ * one user is not in join_consultation.
+ */
+exports.broadcastCallEnded = (session, payload) => {
+  if (!io || !session) return;
+  const sid = session.id;
+  const p = {
+    sessionId: sid,
+    callLogId: payload.callLogId,
+  };
+  io.to(consultationRoom(sid)).emit("call_ended", p);
+  io.to(userRoom(session.customerUserId)).emit("call_ended", p);
+  io.to(userRoom(session.astrologerUserId)).emit("call_ended", p);
+};

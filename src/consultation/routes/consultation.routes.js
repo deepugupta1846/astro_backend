@@ -31,6 +31,10 @@ module.exports = (app) => {
     "/api/v1/consultation/sessions/:id/call/start",
     consultationController.startCall
   );
+  app.get(
+    "/api/v1/consultation/calls/history/:userId",
+    consultationController.listCallHistory
+  );
   app.patch(
     "/api/v1/consultation/calls/:callLogId/end",
     consultationController.endCall
