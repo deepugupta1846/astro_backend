@@ -1,5 +1,6 @@
 const db = require("../../../models");
 const User = db.user;
+const { signUserToken } = require("../../auth/jwt.service");
 
 // In-memory OTP (use Redis/SMS provider in production). Key: phone (trimmed digits)
 const otpStore = new Map();
@@ -272,10 +273,11 @@ exports.login = async (req, res) => {
       });
     }
 
+    const token = signUserToken(user);
     res.status(200).json({
       success: true,
       message: "Login successful",
-      data: { user: toUserResponse(user) },
+      data: { user: toUserResponse(user), token },
     });
   } catch (error) {
     res.status(500).json({
