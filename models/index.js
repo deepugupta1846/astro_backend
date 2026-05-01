@@ -30,6 +30,17 @@ db.astrologer = require("../src/astrologer/model/astrologer.model.js")(
   sequelize,
   Sequelize
 );
+db.remedy = require("../src/remedy/model/remedy.model.js")(sequelize, Sequelize);
+db.puja = require("../src/puja/model/puja.model.js")(sequelize, Sequelize);
+db.pujaBooking = require("../src/puja/model/puja_booking.model.js")(
+  sequelize,
+  Sequelize
+);
+db.kundli = require("../src/kundli/model/kundli.model.js")(sequelize, Sequelize);
+db.notification = require("../src/notification/model/notification.model.js")(
+  sequelize,
+  Sequelize
+);
 db.consultationSession = require("../src/consultation/model/consultation_session.model.js")(
   sequelize,
   Sequelize
@@ -54,5 +65,13 @@ db.consultationSession.belongsTo(db.user, {
 db.chatMessage.belongsTo(db.consultationSession, { foreignKey: "sessionId" });
 db.callLog.belongsTo(db.consultationSession, { foreignKey: "sessionId" });
 db.consultationSession.hasMany(db.callLog, { foreignKey: "sessionId" });
+db.pujaBooking.belongsTo(db.puja, { foreignKey: "pujaId" });
+db.puja.hasMany(db.pujaBooking, { foreignKey: "pujaId" });
+db.pujaBooking.belongsTo(db.user, { foreignKey: "userId" });
+db.user.hasMany(db.pujaBooking, { foreignKey: "userId" });
+db.kundli.belongsTo(db.user, { foreignKey: "userId" });
+db.user.hasMany(db.kundli, { foreignKey: "userId" });
+db.notification.belongsTo(db.user, { foreignKey: "userId" });
+db.user.hasMany(db.notification, { foreignKey: "userId" });
 
 module.exports = db;
