@@ -52,6 +52,8 @@ require("./src/upload/upload.routes.js")(app);
 require("./src/user/routes/user.routes.js")(app);
 require("./src/astrologer/routes/astrologer.routes.js")(app);
 require("./src/consultation/routes/consultation.routes.js")(app);
+require("./src/admin/admin.routes.js")(app);
+require("./src/puja/routes/puja.routes.js")(app);
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {

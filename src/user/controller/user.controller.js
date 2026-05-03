@@ -1,9 +1,55 @@
 const db = require("../../../models");
 const User = db.user;
+const Kundli = db.kundli;
+const Notification = db.notification;
+const { signUserToken } = require("../../auth/jwt.service");
+const crypto = require("crypto");
+const Razorpay = require("razorpay");
+const twilio = require("twilio");
 
-// In-memory OTP (use Redis/SMS provider in production). Key: phone (trimmed digits)
-const otpStore = new Map();
-const OTP_EXPIRY_SEC = 300;
+const twilioClient =
+  process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+    ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+    : null;
+const twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+const OTP_EXPIRY_SEC = 600;
+const processedWalletPaymentIds = new Set();
+
+const razorpayClient =
+  process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
+    ? new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+      })
+    : null;
+
+function getRazorpayPublicKey() {
+  return String(process.env.RAZORPAY_KEY_ID || "").trim();
+}
+
+function isSendOtpOnPhoneEnabled() {
+  return String(process.env.SEND_OTP_ON_PHONE || "true").toLowerCase() === "true";
+}
+
+function getMasterOtp() {
+  const masterRaw = process.env.MASTER_OTP;
+  return masterRaw != null && String(masterRaw).trim() !== ""
+    ? String(masterRaw).trim()
+    : null;
+}
+
+function toE164Phone(phone, countryCode = "+91") {
+  const phoneDigits = String(phone || "").replace(/\D/g, "");
+  const code = String(countryCode || "+91").trim();
+  const codeDigits = code.startsWith("+")
+    ? `+${code.slice(1).replace(/\D/g, "")}`
+    : `+${code.replace(/\D/g, "")}`;
+  if (!phoneDigits) return "";
+  if (String(phone || "").trim().startsWith("+")) {
+    return `+${String(phone).trim().slice(1).replace(/\D/g, "")}`;
+  }
+  return `${codeDigits}${phoneDigits}`;
+}
 
 async function findOrCreateUserByPhone(normalizedPhone, countryCode) {
   let user = await User.findOne({ where: { phone: normalizedPhone } });
@@ -25,6 +71,7 @@ async function findOrCreateUserByPhone(normalizedPhone, countryCode) {
 exports.sendOtp = async (req, res) => {
   try {
     const { phone, countryCode = "+91" } = req.body;
+    const sendOtpOnPhone = isSendOtpOnPhoneEnabled();
 
     if (!phone || !phone.trim()) {
       return res.status(400).json({
@@ -34,16 +81,40 @@ exports.sendOtp = async (req, res) => {
     }
 
     const normalizedPhone = String(phone).trim();
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + OTP_EXPIRY_SEC * 1000;
-    otpStore.set(normalizedPhone, { otp, expiresAt });
+    const toPhone = toE164Phone(normalizedPhone, countryCode);
+    if (!toPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number",
+      });
+    }
 
-    // Integrate SMS gateway later. _devOtp only in non-production for testing.
+    if (!sendOtpOnPhone) {
+      return res.status(200).json({
+        success: true,
+        message: "OTP sending is disabled. Use MASTER_OTP for verification.",
+        data: { expiresIn: OTP_EXPIRY_SEC, sendOtpOnPhone: false },
+      });
+    }
+
+    if (!twilioClient || !twilioVerifyServiceSid) {
+      return res.status(500).json({
+        success: false,
+        message: "OTP service is not configured",
+      });
+    }
+
+    await twilioClient.verify.v2
+      .services(twilioVerifyServiceSid)
+      .verifications.create({
+        to: toPhone,
+        channel: "sms",
+      });
+
     res.status(200).json({
       success: true,
       message: "OTP sent successfully",
-      data: { expiresIn: OTP_EXPIRY_SEC },
-      ...(process.env.NODE_ENV !== "production" && { _devOtp: otp }),
+      data: { expiresIn: OTP_EXPIRY_SEC, sendOtpOnPhone: true },
     });
   } catch (error) {
     res.status(500).json({
@@ -59,6 +130,7 @@ exports.sendOtp = async (req, res) => {
 exports.verifyOtp = async (req, res) => {
   try {
     const { phone, countryCode = "+91", otp, signupIntent } = req.body;
+    const sendOtpOnPhone = isSendOtpOnPhoneEnabled();
 
     if (!phone || !String(phone).trim()) {
       return res.status(400).json({
@@ -75,6 +147,14 @@ exports.verifyOtp = async (req, res) => {
     }
 
     const normalizedPhone = String(phone).trim();
+    const toPhone = toE164Phone(normalizedPhone, countryCode);
+    if (!toPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid phone number",
+      });
+    }
+
     const otpStr = String(otp).trim();
     if (otpStr.length !== 6 || !/^\d+$/.test(otpStr)) {
       return res.status(400).json({
@@ -83,35 +163,45 @@ exports.verifyOtp = async (req, res) => {
       });
     }
 
-    const masterRaw = process.env.MASTER_OTP;
-    const masterOtp =
-      masterRaw != null && String(masterRaw).trim() !== ""
-        ? String(masterRaw).trim()
-        : null;
+    const masterOtp = getMasterOtp();
     const usedMasterOtp = Boolean(masterOtp && otpStr === masterOtp);
 
-    if (!usedMasterOtp) {
-      const stored = otpStore.get(normalizedPhone);
-      if (!stored) {
-        return res.status(400).json({
+    if (!sendOtpOnPhone) {
+      if (!masterOtp) {
+        return res.status(500).json({
           success: false,
-          message: "OTP expired or not sent. Request a new OTP.",
+          message: "MASTER_OTP is not configured",
         });
       }
-      if (Date.now() > stored.expiresAt) {
-        otpStore.delete(normalizedPhone);
-        return res.status(400).json({
-          success: false,
-          message: "OTP expired. Request a new OTP.",
-        });
-      }
-      if (stored.otp !== otpStr) {
+      if (!usedMasterOtp) {
         return res.status(400).json({
           success: false,
           message: "Invalid OTP",
         });
       }
-      otpStore.delete(normalizedPhone);
+    }
+
+    if (sendOtpOnPhone && !usedMasterOtp) {
+      if (!twilioClient || !twilioVerifyServiceSid) {
+        return res.status(500).json({
+          success: false,
+          message: "OTP service is not configured",
+        });
+      }
+
+      const verification = await twilioClient.verify.v2
+        .services(twilioVerifyServiceSid)
+        .verificationChecks.create({
+          to: toPhone,
+          code: otpStr,
+        });
+
+      if (verification.status !== "approved") {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+        });
+      }
     }
 
     const { user, existingUser } = await findOrCreateUserByPhone(
@@ -142,6 +232,178 @@ exports.verifyOtp = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || "Error verifying OTP",
+    });
+  }
+};
+
+/**
+ * Create Razorpay order for wallet topup
+ * Body: { userId, amount }
+ */
+exports.createWalletTopupOrder = async (req, res) => {
+  try {
+    const userIdRaw = req.body?.userId;
+    const amountRaw = req.body?.amount;
+    const userId =
+      typeof userIdRaw === "number"
+        ? userIdRaw
+        : parseInt(String(userIdRaw || ""), 10);
+    const amount = Number(amountRaw);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId is required",
+      });
+    }
+    if (!Number.isFinite(amount) || amount < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount must be at least 1",
+      });
+    }
+    if (!razorpayClient || !getRazorpayPublicKey()) {
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay is not configured",
+      });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const amountPaise = Math.round(amount * 100);
+    const order = await razorpayClient.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: `wallet_${userId}_${Date.now()}`,
+      notes: {
+        userId: String(userId),
+        purpose: "wallet_topup",
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Wallet topup order created",
+      data: {
+        keyId: getRazorpayPublicKey(),
+        orderId: order.id,
+        amount: amount,
+        amountPaise: order.amount,
+        currency: order.currency,
+        user: toUserResponse(user),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error creating wallet topup order",
+    });
+  }
+};
+
+/**
+ * Verify Razorpay payment and credit wallet
+ * Body: { userId, amount, razorpayOrderId, razorpayPaymentId, razorpaySignature }
+ */
+exports.verifyWalletTopup = async (req, res) => {
+  try {
+    const userIdRaw = req.body?.userId;
+    const amountRaw = req.body?.amount;
+    const razorpayOrderId = String(req.body?.razorpayOrderId || "").trim();
+    const razorpayPaymentId = String(req.body?.razorpayPaymentId || "").trim();
+    const razorpaySignature = String(req.body?.razorpaySignature || "").trim();
+    const userId =
+      typeof userIdRaw === "number"
+        ? userIdRaw
+        : parseInt(String(userIdRaw || ""), 10);
+    const amount = Number(amountRaw);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid userId is required",
+      });
+    }
+    if (!Number.isFinite(amount) || amount < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount must be at least 1",
+      });
+    }
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment verification fields are required",
+      });
+    }
+
+    const secret = String(process.env.RAZORPAY_KEY_SECRET || "").trim();
+    if (!secret) {
+      return res.status(500).json({
+        success: false,
+        message: "Razorpay is not configured",
+      });
+    }
+
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+      .digest("hex");
+
+    if (expectedSignature !== razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment signature",
+      });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (processedWalletPaymentIds.has(razorpayPaymentId)) {
+      return res.status(200).json({
+        success: true,
+        message: "Payment already processed",
+        data: {
+          user: toUserResponse(user),
+          walletBalance: Number(user.walletBalance || 0),
+          alreadyProcessed: true,
+        },
+      });
+    }
+
+    const current = Number(user.walletBalance || 0);
+    const nextBalance = Number((current + amount).toFixed(2));
+    await user.update({ walletBalance: nextBalance });
+    processedWalletPaymentIds.add(razorpayPaymentId);
+    const refreshed = await User.findByPk(userId);
+
+    return res.status(200).json({
+      success: true,
+      message: "Wallet topup successful",
+      data: {
+        user: toUserResponse(refreshed || user),
+        walletBalance: Number((refreshed?.walletBalance ?? nextBalance) || 0),
+        paymentId: razorpayPaymentId,
+        orderId: razorpayOrderId,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error verifying wallet topup",
     });
   }
 };
@@ -272,10 +534,11 @@ exports.login = async (req, res) => {
       });
     }
 
+    const token = signUserToken(user);
     res.status(200).json({
       success: true,
       message: "Login successful",
-      data: { user: toUserResponse(user) },
+      data: { user: toUserResponse(user), token },
     });
   } catch (error) {
     res.status(500).json({
@@ -332,6 +595,253 @@ exports.updatePushToken = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Error updating push token",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/user/:id/push-token
+ */
+exports.getPushToken = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user id is required",
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        userId: user.id,
+        fcmToken: user.fcmToken || null,
+        fcmTokenUpdatedAt: user.fcmTokenUpdatedAt || null,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error fetching push token",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/user/:id/logout
+ * Clears stored FCM token for the user.
+ */
+exports.logout = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user id is required",
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    await user.update({
+      fcmToken: null,
+      fcmTokenUpdatedAt: null,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Logout successful",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error during logout",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/user/:id/kundlis
+ * multipart/form-data:
+ * - file: image/pdf
+ * - title?: string
+ * - notes?: string
+ */
+exports.uploadKundli = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user id is required",
+      });
+    }
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Kundli file is required (field: file)",
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const fileUrl = `${req.protocol}://${req.get("host")}/uploads/kundli/${req.file.filename}`;
+    const row = await Kundli.create({
+      userId: id,
+      title:
+        req.body?.title != null && String(req.body.title).trim()
+          ? String(req.body.title).trim()
+          : null,
+      notes:
+        req.body?.notes != null && String(req.body.notes).trim()
+          ? String(req.body.notes).trim()
+          : null,
+      fileUrl,
+      fileType: req.file.mimetype || null,
+      originalName: req.file.originalname || null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Kundli uploaded successfully",
+      data: row,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error uploading kundli",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/user/:id/kundlis
+ */
+exports.getKundlis = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user id is required",
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const rows = await Kundli.findAll({
+      where: { userId: id },
+      order: [["createdAt", "DESC"]],
+    });
+    return res.status(200).json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error fetching kundlis",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/user/:id/notifications
+ */
+exports.getNotifications = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user id is required",
+      });
+    }
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+    const rows = await Notification.findAll({
+      where: { userId: id },
+      order: [["createdAt", "DESC"]],
+    });
+    return res.status(200).json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error fetching notifications",
+    });
+  }
+};
+
+/**
+ * PUT /api/v1/user/:id/notifications/:notificationId/read
+ */
+exports.markNotificationRead = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const notificationId = parseInt(req.params.notificationId, 10);
+    if (!id || !notificationId) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid user id and notification id are required",
+      });
+    }
+    const row = await Notification.findOne({
+      where: { id: notificationId, userId: id },
+    });
+    if (!row) {
+      return res.status(404).json({
+        success: false,
+        message: "Notification not found",
+      });
+    }
+    await row.update({
+      isRead: true,
+      readAt: row.readAt || new Date(),
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Notification marked as read",
+      data: row,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error updating notification",
     });
   }
 };
