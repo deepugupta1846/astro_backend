@@ -179,6 +179,13 @@ module.exports = (sequelize, Sequelize) => {
         type: Sequelize.BOOLEAN,
         defaultValue: false,
       },
+      walletBalance: {
+        type: Sequelize.DECIMAL(12, 2),
+        allowNull: false,
+        defaultValue: 0,
+        field: "wallet_balance",
+        comment: "Astrologer wallet balance in INR",
+      },
       averageRating: {
         type: Sequelize.DECIMAL(3, 2),
         defaultValue: 0,

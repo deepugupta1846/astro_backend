@@ -4,11 +4,20 @@ Base URL (local): `http://localhost:5000`
 
 ## Common Notes
 
-- All responses are JSON.
-- Success responses usually contain: `success`, optional `message`, and optional `data`.
+- All responses are JSON unless noted (e.g. Razorpay webhook uses raw JSON body).
+- Success responses usually contain: `success: true`, optional `message`, and optional `data`.
+- Error responses typically look like:
+```json
+{
+  "success": false,
+  "message": "Human-readable reason"
+}
+```
 - Admin APIs require header:
   - `Authorization: Bearer <admin_jwt_token>`
 - Path params are shown as `:id`, `:userId`, etc.
+- **Wallet:** Two user top-up paths exist—legacy `/api/v1/user/wallet/*` (simple balance update, no `wallet_transactions` rows) and **recommended** `/api/v1/wallet/user/:userId/*` (Razorpay order + verify + history + webhook-compatible crediting). Prefer the `/api/v1/wallet/...` APIs for new apps.
+- Real-time chat/consultation also uses **Socket.IO** (see `server.js` / `consultation.socket.js`); REST endpoints below cover sessions, messages, and calls.
 
 ---
 
@@ -82,56 +91,96 @@ image: <file>
 }
 ```
 
-### POST `/api/v1/user/wallet/create-order`
+### POST `/api/v1/user/wallet/create-order` (legacy)
+
+Creates a Razorpay order and returns checkout fields. Does **not** write to `wallet_transactions`; balance is updated only via the matching verify endpoint.
+
+- **Body (JSON):**
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `userId` | number | Yes | Internal user id |
+| `amount` | number | Yes | INR amount, minimum `1` |
+
 - Dummy payload:
 ```json
 {
   "userId": 12,
-  "amount": 100
+  "amount": 250.5
 }
 ```
-- Dummy response:
+- Dummy success response:
 ```json
 {
   "success": true,
   "message": "Wallet topup order created",
   "data": {
-    "keyId": "rzp_test_xxxxx",
-    "orderId": "order_Qwerty123",
-    "amount": 100,
-    "amountPaise": 10000,
+    "keyId": "rzp_test_AbCdEfGhIjKlMn",
+    "orderId": "order_NwertyUiOpAsDf",
+    "amount": 250.5,
+    "amountPaise": 25050,
     "currency": "INR",
     "user": {
       "id": 12,
-      "phone": "9876543210"
+      "phone": "9876543210",
+      "name": "Deepu",
+      "role": "user"
     }
   }
 }
 ```
 
-### POST `/api/v1/user/wallet/verify`
+### POST `/api/v1/user/wallet/verify` (legacy)
+
+Verifies `razorpay_order_id|razorpay_payment_id` HMAC using server `RAZORPAY_KEY_SECRET`, then credits `users.wallet_balance`. Uses an in-memory set for duplicate `paymentId` in a single server process (not ideal for multi-instance; prefer `/api/v1/wallet/user/:userId/verify`).
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `userId` | number | Yes |
+| `amount` | number | Yes (min `1`) |
+| `razorpayOrderId` | string | Yes |
+| `razorpayPaymentId` | string | Yes |
+| `razorpaySignature` | string | Yes (from Razorpay Checkout success payload) |
+
 - Dummy payload:
 ```json
 {
   "userId": 12,
-  "amount": 100,
-  "razorpayOrderId": "order_Qwerty123",
-  "razorpayPaymentId": "pay_AbCdEf123",
-  "razorpaySignature": "generated_signature_here"
+  "amount": 250.5,
+  "razorpayOrderId": "order_NwertyUiOpAsDf",
+  "razorpayPaymentId": "pay_LkJhGfDsAQWeRt",
+  "razorpaySignature": "a1b2c3d4e5f67890abcdef1234567890abcdef12"
 }
 ```
-- Dummy response:
+- Dummy success response (first time):
 ```json
 {
   "success": true,
   "message": "Wallet topup successful",
   "data": {
     "user": {
-      "id": 12
+      "id": 12,
+      "phone": "9876543210",
+      "name": "Deepu",
+      "role": "user"
     },
-    "walletBalance": 450,
-    "paymentId": "pay_AbCdEf123",
-    "orderId": "order_Qwerty123"
+    "walletBalance": 1250.5,
+    "paymentId": "pay_LkJhGfDsAQWeRt",
+    "orderId": "order_NwertyUiOpAsDf"
+  }
+}
+```
+- Dummy success response (duplicate `paymentId` in same process):
+```json
+{
+  "success": true,
+  "message": "Payment already processed",
+  "data": {
+    "user": { "id": 12, "phone": "9876543210", "name": "Deepu", "role": "user" },
+    "walletBalance": 1250.5,
+    "alreadyProcessed": true
   }
 }
 ```
@@ -298,6 +347,331 @@ image: <file>
 
 ---
 
+## Wallet APIs (recommended — Razorpay + transaction history)
+
+Base paths use **path parameters** for `userId` or `astrologerId` (must match the logged-in entity). Amounts are **INR** with two decimal places where applicable.
+
+Environment variables used by these routes: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`; optional `WALLET_TOPUP_SUCCESS_RETURN_URL`, `WALLET_TOPUP_CANCEL_RETURN_URL` (surfaced in create-order JSON for app deep links).
+
+### GET `/api/v1/wallet/user/:userId`
+
+Wallet summary and recent transactions (last 20).
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": {
+    "entityType": "user",
+    "entityId": 12,
+    "walletBalance": 1500,
+    "recentTransactions": [
+      {
+        "id": 88,
+        "entityType": "user",
+        "entityId": 12,
+        "type": "credit",
+        "amount": "500.00",
+        "balanceBefore": "1000.00",
+        "balanceAfter": "1500.00",
+        "currency": "INR",
+        "status": "success",
+        "source": "razorpay",
+        "description": "Wallet top-up order (user)",
+        "referenceId": null,
+        "razorpayOrderId": "order_NwertyUiOpAsDf",
+        "razorpayPaymentId": "pay_LkJhGfDsAQWeRt",
+        "metadata": { "verifiedAt": "2026-05-09T10:15:30.000Z" },
+        "createdAt": "2026-05-09T10:15:30.000Z",
+        "updatedAt": "2026-05-09T10:15:30.000Z"
+      }
+    ]
+  }
+}
+```
+
+### GET `/api/v1/wallet/user/:userId/transactions`
+
+Paginated history.
+
+- **Query:** `limit` (default `50`, max `200`), `offset` (default `0`).
+- Example: `/api/v1/wallet/user/12/transactions?limit=10&offset=0`
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 88,
+      "entityType": "user",
+      "entityId": 12,
+      "type": "credit",
+      "amount": "500.00",
+      "status": "success",
+      "source": "razorpay",
+      "razorpayOrderId": "order_NwertyUiOpAsDf",
+      "razorpayPaymentId": "pay_LkJhGfDsAQWeRt",
+      "createdAt": "2026-05-09T10:15:30.000Z"
+    }
+  ],
+  "pagination": {
+    "total": 24,
+    "limit": 10,
+    "offset": 0,
+    "hasMore": true
+  }
+}
+```
+
+### POST `/api/v1/wallet/user/:userId/create-order`
+
+Creates a Razorpay order and a **pending** `wallet_transactions` row. Use returned `keyId`, `orderId`, and `amountPaise` in Razorpay Checkout (UPI / cards / etc.).
+
+- **Body (JSON):**
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `amount` | number | Yes | INR, minimum `1` |
+| `description` | string | No | Max 300 chars, stored on pending tx |
+
+- Dummy payload:
+```json
+{
+  "amount": 499,
+  "description": "Wallet top-up via UPI"
+}
+```
+- Dummy success response:
+```json
+{
+  "success": true,
+  "message": "Wallet topup order created",
+  "data": {
+    "keyId": "rzp_test_AbCdEfGhIjKlMn",
+    "orderId": "order_NwertyUiOpAsDf",
+    "amount": 499,
+    "amountPaise": 49900,
+    "currency": "INR",
+    "entityType": "user",
+    "entityId": 12,
+    "checkout": {
+      "provider": "razorpay",
+      "hint": "Open Razorpay Checkout in the app with keyId + orderId + amount (paise). User can pay with UPI (PhonePe, Google Pay, etc.); the SDK returns control to your app after payment.",
+      "suggestedMethods": ["upi", "card", "netbanking", "wallet"]
+    },
+    "redirect": {
+      "successReturnUrl": "astrologer://wallet/topup/success",
+      "cancelReturnUrl": "astrologer://wallet/topup/cancel"
+    }
+  }
+}
+```
+*(If env URLs are unset, `successReturnUrl` / `cancelReturnUrl` are `null`.)*
+
+### POST `/api/v1/wallet/user/:userId/verify`
+
+Verifies payment signature and credits wallet **inside a DB transaction** (idempotent per `razorpayPaymentId`).
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `razorpayOrderId` | string | Yes |
+| `razorpayPaymentId` | string | Yes |
+| `razorpaySignature` | string | Yes |
+| `amount` | number | Yes (must match pending order within tolerance) |
+
+- Dummy payload:
+```json
+{
+  "razorpayOrderId": "order_NwertyUiOpAsDf",
+  "razorpayPaymentId": "pay_LkJhGfDsAQWeRt",
+  "razorpaySignature": "a1b2c3d4e5f67890abcdef1234567890abcdef12",
+  "amount": 499
+}
+```
+- Dummy success response:
+```json
+{
+  "success": true,
+  "message": "Wallet topup successful",
+  "data": {
+    "entityType": "user",
+    "entityId": 12,
+    "walletBalance": 1999,
+    "alreadyProcessed": false,
+    "orderId": "order_NwertyUiOpAsDf",
+    "paymentId": "pay_LkJhGfDsAQWeRt",
+    "transactionId": 88
+  }
+}
+```
+
+### GET `/api/v1/wallet/user/:userId/razorpay/order-status/:orderId`
+
+Poll Razorpay order state and linked wallet row (after returning from UPI app). `:orderId` is the Razorpay order id (e.g. `order_xxx`).
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": {
+    "orderId": "order_NwertyUiOpAsDf",
+    "razorpayOrderStatus": "paid",
+    "amountPaise": 49900,
+    "walletTransactionStatus": "success",
+    "walletCredited": true,
+    "payments": [
+      {
+        "id": "pay_LkJhGfDsAQWeRt",
+        "status": "captured",
+        "method": "upi"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### GET `/api/v1/wallet/astrologer/:astrologerId`
+
+Same shape as user wallet; `entityType` is `"astrologer"`.
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": {
+    "entityType": "astrologer",
+    "entityId": 4,
+    "walletBalance": 3200.75,
+    "recentTransactions": []
+  }
+}
+```
+
+### GET `/api/v1/wallet/astrologer/:astrologerId/transactions`
+
+- **Query:** `limit`, `offset` (same rules as user).
+
+### POST `/api/v1/wallet/astrologer/:astrologerId/create-order`
+
+- **Body:** Same as user (`amount`, optional `description`).
+- **Response:** Same structure with `entityType: "astrologer"` and `entityId` matching path.
+
+### POST `/api/v1/wallet/astrologer/:astrologerId/verify`
+
+- **Body:** Same as user verify (`razorpayOrderId`, `razorpayPaymentId`, `razorpaySignature`, `amount`).
+
+### GET `/api/v1/wallet/astrologer/:astrologerId/razorpay/order-status/:orderId`
+
+- Same behaviour as user order-status.
+
+---
+
+### POST `/api/v1/wallet/transfer/user-to-astrologer`
+
+Internal settlement: debit user wallet, credit astrologer wallet, append two ledger rows (`source: consultation`). Uses a DB transaction.
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `userId` | number | Yes |
+| `astrologerId` | number | Yes |
+| `amount` | number | Yes, greater than 0 |
+| `referenceId` | string | No (max 120) |
+| `description` | string | No (max 300; default consultation settlement) |
+
+- Dummy payload:
+```json
+{
+  "userId": 12,
+  "astrologerId": 4,
+  "amount": 150,
+  "referenceId": "session_101_close",
+  "description": "Voice consultation 10 min"
+}
+```
+- Dummy success response:
+```json
+{
+  "success": true,
+  "message": "Transfer completed",
+  "data": {
+    "amount": 150,
+    "user": { "id": 12, "walletBalance": 1849 },
+    "astrologer": { "id": 4, "walletBalance": 3350.75 }
+  }
+}
+```
+- Dummy error (insufficient balance):
+```json
+{
+  "success": false,
+  "message": "Insufficient user wallet balance"
+}
+```
+
+---
+
+## Razorpay webhook (server-to-server)
+
+### POST `/api/v1/wallet/razorpay/webhook`
+
+- **Purpose:** On `payment.captured`, credit the wallet if the mobile app never called `verify` (e.g. killed after UPI). Idempotent with the same logic as verify.
+- **Content-Type:** `application/json`
+- **Body:** Raw JSON event from Razorpay (not wrapped by your app).
+- **Header:** `X-Razorpay-Signature` — HMAC-SHA256 of raw body using `RAZORPAY_WEBHOOK_SECRET` (from Razorpay Dashboard → Webhooks).
+- **Configure:** Dashboard webhook URL `https://<your-host>/api/v1/wallet/razorpay/webhook`, subscribe at least to **`payment.captured`**.
+
+Dummy **request** body (illustrative):
+```json
+{
+  "entity": "event",
+  "account_id": "acc_ABCDEF123456",
+  "event": "payment.captured",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_LkJhGfDsAQWeRt",
+        "entity": "payment",
+        "amount": 49900,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_NwertyUiOpAsDf",
+        "method": "upi"
+      }
+    }
+  },
+  "created_at": 1746789000
+}
+```
+
+Dummy **responses:**
+
+Processed / credited:
+```json
+{ "received": true }
+```
+
+Event ignored (wrong type, unknown order, etc.):
+```json
+{ "received": true, "ignored": true }
+```
+
+Invalid signature:
+```json
+{
+  "success": false,
+  "message": "Invalid webhook signature"
+}
+```
+
+---
+
 ## Astrologer APIs
 
 ### GET `/api/v1/astrologer`
@@ -313,6 +687,43 @@ image: <file>
       "averageRating": 4.8
     }
   ]
+}
+```
+
+### GET `/api/v1/astrologer/:id`
+
+Public astrologer profile by primary key. **Excluded from JSON:** `phone`, `email`, `idProofType`, `idProofNumber`, `idProofImageUrl`, `idProofBackImageUrl` (same privacy rule as list).
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": {
+    "id": 4,
+    "userId": 22,
+    "name": "Acharya Ravi",
+    "countryCode": "+91",
+    "gender": "male",
+    "profileImageUrl": "http://localhost:5000/uploads/astro/1718000000000-abc12.jpg",
+    "bio": "Vedic astrologer with 8+ years experience.",
+    "experienceYears": 8,
+    "education": "Jyotish Visharad",
+    "specialties": ["Career", "Marriage"],
+    "languages": ["Hindi", "English"],
+    "skills": ["Vedic", "Prashna"],
+    "consultationFeePerMin": 25,
+    "averageRating": 4.8,
+    "totalRatings": 120,
+    "isOnline": true,
+    "chatEnabled": true,
+    "callEnabled": true,
+    "videoEnabled": false,
+    "walletBalance": "3200.75",
+    "isVerified": true,
+    "isActive": true,
+    "createdAt": "2026-04-01T06:00:00.000Z",
+    "updatedAt": "2026-05-09T09:00:00.000Z"
+  }
 }
 ```
 
@@ -646,6 +1057,32 @@ Authorization: Bearer <admin_jwt_token>
     "name": "Admin User",
     "role": "admin"
   }
+}
+```
+
+### GET `/api/v1/admin/notifications`
+
+Lists notifications for the **authenticated admin user** (e.g. system alerts, new puja bookings if wired).
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 901,
+      "userId": 1,
+      "title": "New Puja Booking",
+      "body": "Deepu requested Maha Mrityunjaya Jaap",
+      "payload": {
+        "type": "puja_booking",
+        "bookingId": "21"
+      },
+      "isRead": false,
+      "readAt": null,
+      "createdAt": "2026-05-09T08:00:00.000Z"
+    }
+  ]
 }
 ```
 
@@ -1221,25 +1658,38 @@ notes: Generated from DOB details
 ```
 
 ### POST `/api/v1/pujas/book`
+
+**Required:** `pujaId`, `name`, `phone`. **Optional:** `userId`, `email`, `city`, `preferredDate`, `preferredTime`, `notes`. Booking `amount` is taken from the puja price server-side.
+
 - Dummy payload:
 ```json
 {
   "pujaId": 11,
   "userId": 12,
-  "name": "Deepu",
+  "name": "Deepu Sharma",
   "phone": "9876543210",
+  "email": "deepu@example.com",
+  "city": "Jaipur",
   "preferredDate": "2026-05-15",
+  "preferredTime": "10:30 AM",
   "notes": "Morning slot preferred"
 }
 ```
+- **HTTP status:** `201 Created` on success.
 - Dummy response:
 ```json
 {
   "success": true,
   "message": "Puja booking created",
   "data": {
-    "id": 5,
+    "id": 21,
     "pujaId": 11,
+    "name": "Deepu Sharma",
+    "phone": "9876543210",
+    "email": "deepu@example.com",
+    "city": "Jaipur",
+    "preferredDate": "2026-05-15",
+    "preferredTime": "10:30 AM",
     "amount": "2100.00",
     "status": "pending"
   }

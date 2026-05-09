@@ -11,6 +11,14 @@ const bodyParser = require("body-parser");
 const morgan = require("morgan");
 const cors = require("cors");
 const db = require("./models/index.js");
+const walletController = require("./src/wallet/controller/wallet.controller.js");
+
+// Razorpay webhooks require the raw body for signature verification (must run before JSON parser).
+app.post(
+  "/api/v1/wallet/razorpay/webhook",
+  express.raw({ type: "application/json" }),
+  walletController.handleRazorpayWebhook
+);
 
 // Middleware setup
 app.use(bodyParser.json());
@@ -51,6 +59,7 @@ const connectDb = async () => {
 require("./src/upload/upload.routes.js")(app);
 require("./src/user/routes/user.routes.js")(app);
 require("./src/astrologer/routes/astrologer.routes.js")(app);
+require("./src/wallet/routes/wallet.routes.js")(app);
 require("./src/consultation/routes/consultation.routes.js")(app);
 require("./src/admin/admin.routes.js")(app);
 require("./src/puja/routes/puja.routes.js")(app);

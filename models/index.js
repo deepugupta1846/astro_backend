@@ -53,6 +53,10 @@ db.callLog = require("../src/consultation/model/call_log.model.js")(
   sequelize,
   Sequelize
 );
+db.walletTransaction = require("../src/wallet/model/wallet_transaction.model.js")(
+  sequelize,
+  Sequelize
+);
 
 db.consultationSession.belongsTo(db.user, {
   foreignKey: "customerUserId",

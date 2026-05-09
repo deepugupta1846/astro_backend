@@ -63,6 +63,43 @@ exports.list = async (req, res) => {
 };
 
 /**
+ * GET /api/v1/astrologer/:id
+ * Public astrologer details by ID (no contact / KYC).
+ */
+exports.findOne = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (Number.isNaN(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid astrologer id",
+      });
+    }
+
+    const astrologer = await Astrologer.findByPk(id, {
+      attributes: { exclude: LIST_EXCLUDE_ATTRIBUTES },
+    });
+
+    if (!astrologer) {
+      return res.status(404).json({
+        success: false,
+        message: "Astrologer not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: toAstrologerResponse(astrologer),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error fetching astrologer",
+    });
+  }
+};
+
+/**
  * POST /api/v1/astrologer
  * Body: full astrologer details (see model)
  */
