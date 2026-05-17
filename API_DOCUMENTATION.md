@@ -17,6 +17,7 @@ Base URL (local): `http://localhost:5000`
   - `Authorization: Bearer <admin_jwt_token>`
 - Path params are shown as `:id`, `:userId`, etc.
 - **Wallet:** Two user top-up paths exist—legacy `/api/v1/user/wallet/*` (simple balance update, no `wallet_transactions` rows) and **recommended** `/api/v1/wallet/user/:userId/*` (Razorpay order + verify + history + webhook-compatible crediting). Prefer the `/api/v1/wallet/...` APIs for new apps.
+- **Call billing:** When a consultation call ends (`PATCH .../calls/:callLogId/end`), the server automatically debits the **customer user** and credits the **astrologer** using `ceil(durationSeconds / 60) × astrologer.consultationFeePerMin`. Settlement is idempotent per call (`referenceId`: `call_{callLogId}`). You can also settle manually via `POST /api/v1/wallet/settle/call/:callLogId`.
 - Real-time chat/consultation also uses **Socket.IO** (see `server.js` / `consultation.socket.js`); REST endpoints below cover sessions, messages, and calls.
 
 ---
@@ -601,11 +602,119 @@ Internal settlement: debit user wallet, credit astrologer wallet, append two led
   "message": "Transfer completed",
   "data": {
     "amount": 150,
+    "alreadyProcessed": false,
     "user": { "id": 12, "walletBalance": 1849 },
-    "astrologer": { "id": 4, "walletBalance": 3350.75 }
+    "astrologer": { "id": 4, "walletBalance": 3350.75 },
+    "referenceId": "session_101_close"
   }
 }
 ```
+- Dummy success (duplicate `referenceId` — no double charge):
+```json
+{
+  "success": true,
+  "message": "Transfer already processed",
+  "data": {
+    "amount": 150,
+    "alreadyProcessed": true,
+    "user": { "id": 12, "walletBalance": 1849 },
+    "astrologer": { "id": 4, "walletBalance": 3350.75 },
+    "referenceId": "session_101_close"
+  }
+}
+```
+- Dummy error (insufficient balance):
+```json
+{
+  "success": false,
+  "message": "Insufficient user wallet balance"
+}
+```
+
+---
+
+### POST `/api/v1/wallet/settle/call/:callLogId`
+
+Settle wallet for a **completed** call using stored duration and the astrologer’s `consultationFeePerMin`. Same billing as automatic settlement on `PATCH .../calls/:callLogId/end`. Use for retries if needed.
+
+- **Path:** `callLogId` — completed call log id (must have `endedAt` set).
+- **Body:** none
+- **Billing formula:** `amount = ceil(durationSeconds / 60) × consultationFeePerMin` (any started second counts as a full minute).
+
+- Dummy request:
+```http
+POST /api/v1/wallet/settle/call/77
+Content-Type: application/json
+```
+```json
+{}
+```
+
+- Dummy success (settled — example: 185s at ₹10/min → 4 billable minutes → ₹40):
+```json
+{
+  "success": true,
+  "message": "Call consultation settled",
+  "data": {
+    "settled": true,
+    "skipped": false,
+    "amount": 40,
+    "billableMinutes": 4,
+    "feePerMin": 10,
+    "durationSeconds": 185,
+    "referenceId": "call_77",
+    "alreadyProcessed": false,
+    "user": { "id": 12, "walletBalance": 460 },
+    "astrologer": { "id": 4, "walletBalance": 140 }
+  }
+}
+```
+
+- Dummy success (already settled):
+```json
+{
+  "success": true,
+  "message": "Call already settled",
+  "data": {
+    "settled": true,
+    "skipped": false,
+    "amount": 40,
+    "billableMinutes": 4,
+    "feePerMin": 10,
+    "durationSeconds": 185,
+    "referenceId": "call_77",
+    "alreadyProcessed": true,
+    "user": { "id": 12, "walletBalance": 460 },
+    "astrologer": { "id": 4, "walletBalance": 140 }
+  }
+}
+```
+
+- Dummy success (nothing to charge — zero duration or astrologer rate is 0):
+```json
+{
+  "success": true,
+  "message": "No wallet charge for this call",
+  "data": {
+    "settled": false,
+    "skipped": true,
+    "reason": "zero_duration",
+    "amount": 0,
+    "billableMinutes": 0,
+    "feePerMin": 0,
+    "referenceId": "call_77"
+  }
+}
+```
+
+- Dummy error (call not ended):
+```json
+{
+  "success": false,
+  "message": "Call has not ended yet"
+}
+```
+
 - Dummy error (insufficient balance):
 ```json
 {
@@ -1022,18 +1131,72 @@ Public astrologer profile by primary key. **Excluded from JSON:** `phone`, `emai
 ```
 
 ### PATCH `/api/v1/consultation/calls/:callLogId/end`
-- Dummy payload:
+
+Ends the call, records `durationSeconds`, and **automatically settles** the customer → astrologer wallet transfer (see **Call billing** in Common Notes). Idempotent: calling end twice does not double-charge.
+
+- **Body:** none required
+
+- Dummy request:
+```http
+PATCH /api/v1/consultation/calls/77/end
+Content-Type: application/json
+```
 ```json
 {}
 ```
-- Dummy response:
+
+- Dummy response (with wallet settlement — 600s at ₹15/min → 10 min → ₹150):
 ```json
 {
   "success": true,
   "data": {
     "id": 77,
     "endedAt": "2026-05-01T04:40:00.000Z",
-    "durationSeconds": 600
+    "durationSeconds": 600,
+    "walletSettlement": {
+      "settled": true,
+      "skipped": false,
+      "amount": 150,
+      "billableMinutes": 10,
+      "feePerMin": 15,
+      "durationSeconds": 600,
+      "referenceId": "call_77",
+      "alreadyProcessed": false,
+      "user": { "id": 12, "walletBalance": 1850 },
+      "astrologer": { "id": 4, "walletBalance": 3500.75 }
+    }
+  }
+}
+```
+
+- Dummy response (insufficient user balance — HTTP 400):
+```json
+{
+  "success": false,
+  "message": "Insufficient user wallet balance"
+}
+```
+
+- Dummy response (call already ended; settlement already processed):
+```json
+{
+  "success": true,
+  "data": {
+    "id": 77,
+    "endedAt": "2026-05-01T04:40:00.000Z",
+    "durationSeconds": 600,
+    "walletSettlement": {
+      "settled": true,
+      "skipped": false,
+      "amount": 150,
+      "billableMinutes": 10,
+      "feePerMin": 15,
+      "durationSeconds": 600,
+      "referenceId": "call_77",
+      "alreadyProcessed": true,
+      "user": { "id": 12, "walletBalance": 1850 },
+      "astrologer": { "id": 4, "walletBalance": 3500.75 }
+    }
   }
 }
 ```

@@ -47,4 +47,8 @@ module.exports = (app) => {
     "/api/v1/wallet/transfer/user-to-astrologer",
     walletController.transferUserToAstrologer
   );
+  app.post(
+    "/api/v1/wallet/settle/call/:callLogId",
+    walletController.settleCallConsultationByLogId
+  );
 };

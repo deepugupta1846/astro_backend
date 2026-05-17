@@ -9,6 +9,7 @@ const {
   broadcastCallEnded,
 } = require("../consultation.realtime");
 const { sendPushToUser } = require("../../notifications/push.service");
+const { settleCallConsultation } = require("../../wallet/wallet.service");
 
 const ConsultationSession = db.consultationSession;
 const ChatMessage = db.chatMessage;
@@ -854,12 +855,18 @@ exports.listCallHistory = async (req, res) => {
  * PATCH /api/v1/consultation/calls/:callLogId/end
  */
 exports.endCall = async (req, res) => {
+  const tx = await db.sequelize.transaction();
   try {
     const id = parseInt(req.params.callLogId, 10);
-    const log = await CallLog.findByPk(id);
+    const log = await CallLog.findByPk(id, {
+      transaction: tx,
+      lock: tx.LOCK.UPDATE,
+    });
     if (!log) {
+      await tx.rollback();
       return res.status(404).json({ success: false, message: "Call not found" });
     }
+
     if (!log.endedAt) {
       const ended = new Date();
       const created = new Date(log.createdAt);
@@ -867,13 +874,17 @@ exports.endCall = async (req, res) => {
         0,
         Math.floor((ended - created) / 1000)
       );
-      await log.update({ endedAt: ended, durationSeconds });
-      await log.reload();
-      const session = await ConsultationSession.findByPk(log.sessionId);
-      if (session) {
-        broadcastCallEnded(session, { callLogId: log.id });
-      }
+      await log.update({ endedAt: ended, durationSeconds }, { transaction: tx });
+      await log.reload({ transaction: tx });
     }
+
+    const session = await ConsultationSession.findByPk(log.sessionId, {
+      transaction: tx,
+    });
+    if (session) {
+      broadcastCallEnded(session, { callLogId: log.id });
+    }
+
     let durationSeconds = log.durationSeconds;
     if (durationSeconds == null && log.endedAt && log.createdAt) {
       durationSeconds = Math.max(
@@ -883,16 +894,40 @@ exports.endCall = async (req, res) => {
         )
       );
     }
+
+    let walletSettlement = null;
+    if (session?.astrologerId) {
+      const astrologer = await Astrologer.findByPk(session.astrologerId, {
+        transaction: tx,
+      });
+      if (astrologer) {
+        walletSettlement = await settleCallConsultation(tx, {
+          callLogId: log.id,
+          userId: session.customerUserId,
+          astrologerId: session.astrologerId,
+          durationSeconds,
+          feePerMin: astrologer.consultationFeePerMin,
+          callType: log.callType,
+          sessionId: session.id,
+        });
+      }
+    }
+
+    await tx.commit();
     res.status(200).json({
       success: true,
       data: {
         id: log.id,
         endedAt: log.endedAt,
         durationSeconds,
+        walletSettlement,
       },
     });
   } catch (error) {
-    res.status(500).json({
+    await tx.rollback();
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    res.status(code).json({
       success: false,
       message: error.message || "Error ending call",
     });

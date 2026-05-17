@@ -5,6 +5,12 @@ const db = require("../../../models");
 const User = db.user;
 const Astrologer = db.astrologer;
 const WalletTransaction = db.walletTransaction;
+const CallLog = db.callLog;
+const ConsultationSession = db.consultationSession;
+const {
+  transferUserToAstrologer: executeUserToAstrologerTransfer,
+  settleCallConsultation,
+} = require("../wallet.service");
 
 const razorpayClient =
   process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
@@ -668,81 +674,130 @@ exports.transferUserToAstrologer = async (req, res) => {
       });
     }
 
-    const user = await User.findByPk(userId, { transaction: tx, lock: tx.LOCK.UPDATE });
-    const astrologer = await Astrologer.findByPk(astrologerId, {
-      transaction: tx,
-      lock: tx.LOCK.UPDATE,
+    const result = await executeUserToAstrologerTransfer(tx, {
+      userId,
+      astrologerId,
+      amount,
+      referenceId,
+      description,
     });
-    if (!user || !astrologer) {
-      await tx.rollback();
-      return res.status(404).json({
-        success: false,
-        message: !user ? "User not found" : "Astrologer not found",
-      });
-    }
-
-    const userBefore = getWalletBalance(user);
-    if (userBefore < amount) {
-      await tx.rollback();
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient user wallet balance",
-      });
-    }
-    const userAfter = Number((userBefore - amount).toFixed(2));
-    const astroBefore = getWalletBalance(astrologer);
-    const astroAfter = Number((astroBefore + amount).toFixed(2));
-
-    await user.update({ walletBalance: userAfter }, { transaction: tx });
-    await astrologer.update({ walletBalance: astroAfter }, { transaction: tx });
-
-    await WalletTransaction.bulkCreate(
-      [
-        {
-          entityType: "user",
-          entityId: userId,
-          type: "debit",
-          amount,
-          balanceBefore: userBefore,
-          balanceAfter: userAfter,
-          status: "success",
-          source: "consultation",
-          description,
-          referenceId,
-          metadata: { counterpartyAstrologerId: astrologerId },
-        },
-        {
-          entityType: "astrologer",
-          entityId: astrologerId,
-          type: "credit",
-          amount,
-          balanceBefore: astroBefore,
-          balanceAfter: astroAfter,
-          status: "success",
-          source: "consultation",
-          description,
-          referenceId,
-          metadata: { counterpartyUserId: userId },
-        },
-      ],
-      { transaction: tx }
-    );
 
     await tx.commit();
     return res.status(200).json({
       success: true,
-      message: "Transfer completed",
+      message: result.alreadyProcessed
+        ? "Transfer already processed"
+        : "Transfer completed",
       data: {
-        amount,
-        user: { id: userId, walletBalance: userAfter },
-        astrologer: { id: astrologerId, walletBalance: astroAfter },
+        amount: result.amount,
+        alreadyProcessed: result.alreadyProcessed,
+        user: result.user,
+        astrologer: result.astrologer,
+        referenceId: result.referenceId,
       },
     });
   } catch (error) {
     await tx.rollback();
-    return res.status(500).json({
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
       success: false,
       message: error.message || "Error transferring wallet amount",
+    });
+  }
+};
+
+/**
+ * Settle wallet for a completed call using duration and astrologer per-minute rate.
+ */
+exports.settleCallConsultationByLogId = async (req, res) => {
+  const tx = await db.sequelize.transaction();
+  try {
+    const callLogId = parsePositiveInt(req.params.callLogId);
+    if (!callLogId) {
+      await tx.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Valid callLogId is required",
+      });
+    }
+
+    const log = await CallLog.findByPk(callLogId, {
+      transaction: tx,
+      lock: tx.LOCK.UPDATE,
+    });
+    if (!log) {
+      await tx.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Call not found",
+      });
+    }
+    if (!log.endedAt) {
+      await tx.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Call has not ended yet",
+      });
+    }
+
+    const session = await ConsultationSession.findByPk(log.sessionId, {
+      transaction: tx,
+    });
+    if (!session || !session.astrologerId) {
+      await tx.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Consultation session not found",
+      });
+    }
+
+    const astrologer = await Astrologer.findByPk(session.astrologerId, {
+      transaction: tx,
+    });
+    if (!astrologer) {
+      await tx.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Astrologer not found",
+      });
+    }
+
+    let durationSeconds = log.durationSeconds;
+    if (durationSeconds == null && log.endedAt && log.createdAt) {
+      durationSeconds = Math.max(
+        0,
+        Math.floor((new Date(log.endedAt) - new Date(log.createdAt)) / 1000)
+      );
+    }
+
+    const settlement = await settleCallConsultation(tx, {
+      callLogId: log.id,
+      userId: session.customerUserId,
+      astrologerId: session.astrologerId,
+      durationSeconds,
+      feePerMin: astrologer.consultationFeePerMin,
+      callType: log.callType,
+      sessionId: session.id,
+    });
+
+    await tx.commit();
+    return res.status(200).json({
+      success: true,
+      message: settlement.skipped
+        ? "No wallet charge for this call"
+        : settlement.alreadyProcessed
+          ? "Call already settled"
+          : "Call consultation settled",
+      data: settlement,
+    });
+  } catch (error) {
+    await tx.rollback();
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error settling call consultation",
     });
   }
 };
