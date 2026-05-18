@@ -11,6 +11,18 @@ module.exports = (app) => {
     consultationController.getSessionSummary
   );
   app.post(
+    "/api/v1/consultation/sessions/:sessionId/accept",
+    consultationController.acceptSession
+  );
+  app.post(
+    "/api/v1/consultation/sessions/:sessionId/decline",
+    consultationController.declineSession
+  );
+  app.post(
+    "/api/v1/consultation/sessions/:sessionId/end",
+    consultationController.endChatSession
+  );
+  app.post(
     "/api/v1/consultation/sessions/:sessionId/read",
     consultationController.markConversationRead
   );

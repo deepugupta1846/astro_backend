@@ -32,6 +32,29 @@ module.exports = (sequelize, Sequelize) => {
         type: Sequelize.ENUM("active", "closed"),
         defaultValue: "active",
       },
+      requestStatus: {
+        type: Sequelize.ENUM("pending", "accepted", "declined"),
+        allowNull: true,
+        defaultValue: "pending",
+        field: "request_status",
+        comment: "null = legacy accepted",
+      },
+      chatStartedAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "chat_started_at",
+        comment: "When astrologer accepted (billing timer start)",
+      },
+      chatEndedAt: {
+        type: Sequelize.DATE,
+        allowNull: true,
+        field: "chat_ended_at",
+      },
+      billedAmount: {
+        type: Sequelize.DECIMAL(12, 2),
+        allowNull: true,
+        field: "billed_amount",
+      },
     },
     {
       timestamps: true,

@@ -444,7 +444,7 @@ Creates a Razorpay order and a **pending** `wallet_transactions` row. Use return
 ```
 - Dummy success response:
 ```json
-{
+{  
   "success": true,
   "message": "Wallet topup order created",
   "data": {
@@ -1858,4 +1858,375 @@ notes: Generated from DOB details
   }
 }
 ```
+
+---
+
+## Latest APIs — Chat request, accept/decline, end & billing
+
+New consultation flow: customer **requests** chat → astrologer **accepts** or **declines** → on accept, timer starts → either party **ends chat** → wallet settles per minute. Voice/video **calls** still use `POST .../call/start` and `PATCH .../calls/:callLogId/end` (billing on call end).
+
+**DB:** Run `migrations/add_consultation_request_fields.sql` once if `consultation_sessions` is missing `request_status`, `chat_started_at`, `chat_ended_at`, `billed_amount`.
+
+**Session fields (new):**
+
+| Field | Values | Notes |
+| ----- | ------ | ----- |
+| `requestStatus` | `pending`, `accepted`, `declined` | `null` on legacy rows = treated as `accepted` |
+| `chatStartedAt` | ISO datetime | Set when astrologer accepts |
+| `chatEndedAt` | ISO datetime | Set when chat ends |
+| `billedAmount` | number | INR charged on end chat |
+
+**Billing:** `amount = ceil(durationSeconds / 60) × consultationFeePerMin` (any started second = full minute). Chat uses `referenceId` `session_{sessionId}`; calls use `call_{callLogId}`.
+
+**Socket.IO (real-time):** Event `session_updated` — payload includes `sessionId`, `requestStatus`, `action` (`created` \| `accepted` \| `declined` \| `ended`), optional `chatStartedAt`, `walletSettlement`.
+
+---
+
+### POST `/api/v1/consultation/sessions` (chat request)
+
+Creates or returns an **active** session between customer and astrologer. **New** sessions start with `requestStatus: "pending"` until the astrologer accepts. Push notification sent to astrologer on first create.
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `customerUserId` | number | Yes |
+| `astrologerId` | number | Yes (FK `astrologers.id`) |
+
+- Dummy payload:
+```json
+{
+  "customerUserId": 12,
+  "astrologerId": 4
+}
+```
+
+- Dummy response (new pending request):
+```json
+{
+  "success": true,
+  "data": {
+    "session": {
+      "id": 101,
+      "customerUserId": 12,
+      "astrologerUserId": 22,
+      "astrologerId": 4,
+      "channelName": "astro_session_101",
+      "status": "active",
+      "requestStatus": "pending",
+      "chatStartedAt": null,
+      "chatEndedAt": null,
+      "billedAmount": null,
+      "createdAt": "2026-05-18T10:00:00.000Z"
+    },
+    "agoraAppId": "your_agora_app_id",
+    "customer": {
+      "userId": 12,
+      "name": "Deepu",
+      "profileImageUrl": null
+    },
+    "astrologerUser": {
+      "userId": 22,
+      "name": "Acharya Ravi",
+      "profileImageUrl": null
+    },
+    "astrologerProfile": {
+      "id": 4,
+      "name": "Acharya Ravi",
+      "bio": "Vedic astrologer with 8+ years experience.",
+      "experienceYears": 8,
+      "education": "Jyotish Visharad",
+      "skills": ["Vedic", "Prashna"],
+      "specialties": ["Career", "Marriage"],
+      "languages": ["Hindi", "English"],
+      "consultationFeePerMin": 25,
+      "averageRating": 4.8,
+      "totalConsultations": 120,
+      "profileImageUrl": "http://localhost:5000/uploads/astro/profile.jpg",
+      "chatEnabled": true,
+      "callEnabled": true,
+      "videoEnabled": false,
+      "isOnline": true
+    }
+  }
+}
+```
+
+- Dummy error (cannot chat with yourself):
+```json
+{
+  "success": false,
+  "message": "Cannot open session with yourself"
+}
+```
+
+---
+
+### GET `/api/v1/consultation/sessions/for-participant/:userId?perspective=astrologer&pendingOnly=true`
+
+List sessions for inbox / **astrologer Requests** tab. Add `pendingOnly=true` to return only chat requests waiting for accept.
+
+| Query | Description |
+| ----- | ----------- |
+| `perspective` | `customer` \| `astrologer` (optional) |
+| `includeClosed` | `true` to include closed sessions |
+| `pendingOnly` | `true` — only `requestStatus: pending` (astrologer queue) |
+
+- Example:
+```http
+GET /api/v1/consultation/sessions/for-participant/22?perspective=astrologer&pendingOnly=true
+```
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "session": {
+        "id": 101,
+        "customerUserId": 12,
+        "astrologerUserId": 22,
+        "astrologerId": 4,
+        "channelName": "astro_session_101",
+        "status": "active",
+        "requestStatus": "pending",
+        "chatStartedAt": null,
+        "chatEndedAt": null,
+        "billedAmount": null,
+        "createdAt": "2026-05-18T10:00:00.000Z"
+      },
+      "customerDisplayName": "Deepu",
+      "astrologerDisplayName": "Acharya Ravi",
+      "customerProfileImageUrl": null,
+      "astrologerProfileImageUrl": "http://localhost:5000/uploads/astro/profile.jpg",
+      "unreadCount": 0,
+      "lastMessage": null,
+      "lastActivityAt": "2026-05-18T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+### POST `/api/v1/consultation/sessions/:sessionId/accept`
+
+Astrologer accepts a **pending** chat request. Sets `requestStatus: accepted`, `chatStartedAt` = now. Customer receives push + `session_updated` socket event. Messaging and calls allowed after accept.
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `actorUserId` | number | Yes — must be `astrologerUserId` for this session |
+
+- Dummy payload:
+```json
+{
+  "actorUserId": 22
+}
+```
+
+- Dummy success response:
+```json
+{
+  "success": true,
+  "message": "Chat request accepted",
+  "data": {
+    "session": {
+      "id": 101,
+      "customerUserId": 12,
+      "astrologerUserId": 22,
+      "astrologerId": 4,
+      "channelName": "astro_session_101",
+      "status": "active",
+      "requestStatus": "accepted",
+      "chatStartedAt": "2026-05-18T10:05:00.000Z",
+      "chatEndedAt": null,
+      "billedAmount": null,
+      "createdAt": "2026-05-18T10:00:00.000Z"
+    }
+  }
+}
+```
+
+- Dummy error (not astrologer):
+```json
+{
+  "success": false,
+  "message": "Only the astrologer can accept this request"
+}
+```
+
+---
+
+### POST `/api/v1/consultation/sessions/:sessionId/decline`
+
+Astrologer declines a **pending** request. Sets `requestStatus: declined`, `status: closed`. Customer receives push + socket event.
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `actorUserId` | number | Yes — astrologer user id |
+
+- Dummy payload:
+```json
+{
+  "actorUserId": 22
+}
+```
+
+- Dummy success response:
+```json
+{
+  "success": true,
+  "message": "Chat request declined",
+  "data": {
+    "session": {
+      "id": 101,
+      "requestStatus": "declined",
+      "status": "closed",
+      "chatEndedAt": "2026-05-18T10:06:00.000Z"
+    }
+  }
+}
+```
+
+---
+
+### POST `/api/v1/consultation/sessions/:sessionId/end`
+
+Ends an **accepted** chat, closes the session, and **settles wallet** (debit user, credit astrologer). Either participant may call. Idempotent wallet via `referenceId` `session_{sessionId}`.
+
+- **Body (JSON):**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `actorUserId` | number | Yes — customer or astrologer user id |
+
+- Dummy payload:
+```json
+{
+  "actorUserId": 12
+}
+```
+
+- Dummy success response (e.g. 7 minutes at ₹25/min → ₹175):
+```json
+{
+  "success": true,
+  "message": "Chat ended",
+  "data": {
+    "session": {
+      "id": 101,
+      "status": "closed",
+      "requestStatus": "accepted",
+      "chatStartedAt": "2026-05-18T10:05:00.000Z",
+      "chatEndedAt": "2026-05-18T10:12:00.000Z",
+      "billedAmount": 175
+    },
+    "durationSeconds": 420,
+    "walletSettlement": {
+      "settled": true,
+      "skipped": false,
+      "amount": 175,
+      "billableMinutes": 7,
+      "feePerMin": 25,
+      "durationSeconds": 420,
+      "referenceId": "session_101",
+      "alreadyProcessed": false,
+      "user": { "id": 12, "walletBalance": 825 },
+      "astrologer": { "id": 4, "walletBalance": 3375.75 }
+    }
+  }
+}
+```
+
+- Dummy error (insufficient balance):
+```json
+{
+  "success": false,
+  "message": "Insufficient user wallet balance"
+}
+```
+
+- Dummy error (chat not accepted yet):
+```json
+{
+  "success": false,
+  "message": "Chat was not active"
+}
+```
+
+---
+
+### POST `/api/v1/consultation/sessions/:id/messages` (guard when pending)
+
+Messages are allowed only when `requestStatus` is `accepted`.
+
+- Dummy error (pending request):
+```json
+{
+  "success": false,
+  "message": "Waiting for astrologer to accept the chat request"
+}
+```
+
+---
+
+### POST `/api/v1/consultation/sessions/:id/call/start` (requires accepted chat)
+
+Voice/video call cannot start until the chat request is accepted.
+
+- Dummy payload:
+```json
+{
+  "callType": "voice",
+  "startedByUserId": 12
+}
+```
+
+- Dummy error (not accepted):
+```json
+{
+  "success": false,
+  "message": "Chat must be accepted before starting a call"
+}
+```
+
+---
+
+### PATCH `/api/v1/consultation/calls/:callLogId/end` (call billing)
+
+Unchanged endpoint; ends call and auto-settles wallet using call duration. See [Consultation APIs](#consultation-apis) and **Call billing** in Common Notes.
+
+- Dummy response includes `walletSettlement` (same shape as chat end).
+
+---
+
+### GET `/api/v1/astrologer/:id` (profile before request)
+
+Used by the app to show fee/min, skills, experience before **Request chat**. Documented in [Astrologer APIs](#astrologer-apis); no change to route.
+
+---
+
+### Related wallet APIs
+
+| Method | Path | Use |
+| ------ | ---- | --- |
+| POST | `/api/v1/wallet/settle/call/:callLogId` | Retry call settlement |
+| POST | `/api/v1/wallet/transfer/user-to-astrologer` | Manual transfer |
+
+---
+
+### Push notification `data.type` values (latest)
+
+| type | When |
+| ---- | ---- |
+| `chat_request` | New pending session |
+| `chat_accepted` | Astrologer accepted |
+| `chat_declined` | Astrologer declined |
+| `chat_ended` | Session ended |
+| `incoming_call` | Voice/video ring (existing) |
 

@@ -7,9 +7,13 @@ const {
   broadcastConversationRead,
   broadcastIncomingCall,
   broadcastCallEnded,
+  broadcastSessionUpdated,
 } = require("../consultation.realtime");
 const { sendPushToUser } = require("../../notifications/push.service");
-const { settleCallConsultation } = require("../../wallet/wallet.service");
+const {
+  settleCallConsultation,
+  settleSessionChat,
+} = require("../../wallet/wallet.service");
 
 const ConsultationSession = db.consultationSession;
 const ChatMessage = db.chatMessage;
@@ -19,6 +23,62 @@ const Astrologer = db.astrologer;
 
 function channelNameForSession(id) {
   return `astro_session_${id}`;
+}
+
+function effectiveRequestStatus(session) {
+  const rs = session?.requestStatus;
+  if (rs == null || rs === "") return "accepted";
+  return String(rs);
+}
+
+function isChatAccepted(session) {
+  return (
+    session.status === "active" && effectiveRequestStatus(session) === "accepted"
+  );
+}
+
+async function astrologerBrief(astrologerId) {
+  if (!astrologerId) return null;
+  const a = await Astrologer.findByPk(astrologerId, {
+    attributes: [
+      "id",
+      "name",
+      "bio",
+      "experienceYears",
+      "education",
+      "skills",
+      "specialties",
+      "languages",
+      "consultationFeePerMin",
+      "averageRating",
+      "totalConsultations",
+      "profileImageUrl",
+      "chatEnabled",
+      "callEnabled",
+      "videoEnabled",
+      "isOnline",
+    ],
+  });
+  if (!a) return null;
+  const o = a.toJSON ? a.toJSON() : a;
+  return {
+    id: o.id,
+    name: o.name,
+    bio: o.bio,
+    experienceYears: o.experienceYears,
+    education: o.education,
+    skills: o.skills,
+    specialties: o.specialties,
+    languages: o.languages,
+    consultationFeePerMin: o.consultationFeePerMin,
+    averageRating: o.averageRating,
+    totalConsultations: o.totalConsultations,
+    profileImageUrl: o.profileImageUrl,
+    chatEnabled: o.chatEnabled,
+    callEnabled: o.callEnabled,
+    videoEnabled: o.videoEnabled,
+    isOnline: o.isOnline,
+  };
 }
 
 /**
@@ -69,6 +129,10 @@ exports.createOrGetSession = async (req, res) => {
         customerUserId: cid,
         astrologerUserId: astroUser.id,
         status: "active",
+        [Op.or]: [
+          { requestStatus: { [Op.in]: ["pending", "accepted"] } },
+          { requestStatus: null },
+        ],
       },
       order: [["id", "DESC"]],
     });
@@ -80,12 +144,34 @@ exports.createOrGetSession = async (req, res) => {
         astrologerId: aid,
         channelName: "pending",
         status: "active",
+        requestStatus: "pending",
       });
       await session.update({ channelName: channelNameForSession(session.id) });
       await session.reload();
+      const customerUser = await User.findByPk(cid, {
+        attributes: ["id", "name", "fcmToken"],
+      });
+      const customerName =
+        customerUser?.name && String(customerUser.name).trim()
+          ? String(customerUser.name).trim()
+          : "A customer";
+      await sendPushToUser(astroUser, {
+        title: "New chat request",
+        body: `${customerName} wants to chat with you`,
+        data: {
+          type: "chat_request",
+          sessionId: String(session.id),
+          customerUserId: String(cid),
+        },
+      });
+      broadcastSessionUpdated(session, {
+        requestStatus: "pending",
+        action: "created",
+      });
     }
 
     const participants = await participantSummaries(session);
+    const astrologerProfile = await astrologerBrief(session.astrologerId);
 
     res.status(200).json({
       success: true,
@@ -94,6 +180,7 @@ exports.createOrGetSession = async (req, res) => {
         agoraAppId: process.env.AGORA_APP_ID || null,
         customer: participants.customer,
         astrologerUser: participants.astrologerUser,
+        astrologerProfile,
       },
     });
   } catch (error) {
@@ -113,6 +200,10 @@ function sessionToJson(s) {
     astrologerId: o.astrologerId,
     channelName: o.channelName,
     status: o.status,
+    requestStatus: effectiveRequestStatus(s),
+    chatStartedAt: o.chatStartedAt || null,
+    chatEndedAt: o.chatEndedAt || null,
+    billedAmount: o.billedAmount != null ? Number(o.billedAmount) : null,
     createdAt: o.createdAt,
   };
 }
@@ -246,8 +337,16 @@ exports.listSessionsForParticipant = async (req, res) => {
         { astrologerUserId: userId },
       ];
     }
+    const pendingOnly =
+      req.query.pendingOnly === "true" ||
+      req.query.pendingOnly === "1" ||
+      req.query.pendingOnly === "yes";
+
     if (!includeClosed) {
       where.status = "active";
+    }
+    if (pendingOnly) {
+      where.requestStatus = "pending";
     }
 
     const sessions = await ConsultationSession.findAll({
@@ -389,6 +488,7 @@ exports.getSessionSummary = async (req, res) => {
     }
 
     const participants = await participantSummaries(session);
+    const astrologerProfile = await astrologerBrief(session.astrologerId);
 
     res.status(200).json({
       success: true,
@@ -397,12 +497,273 @@ exports.getSessionSummary = async (req, res) => {
         agoraAppId: process.env.AGORA_APP_ID || null,
         customer: participants.customer,
         astrologerUser: participants.astrologerUser,
+        astrologerProfile,
       },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: error.message || "Error loading session",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/consultation/sessions/:sessionId/accept
+ * Body: { actorUserId } — must be astrologer user id
+ */
+exports.acceptSession = async (req, res) => {
+  try {
+    const sessionId = parseInt(req.params.sessionId, 10);
+    const actorUserId = parseInt(req.body?.actorUserId, 10);
+    if (!sessionId || !actorUserId) {
+      return res.status(400).json({
+        success: false,
+        message: "sessionId and actorUserId are required",
+      });
+    }
+    const session = await ConsultationSession.findByPk(sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, message: "Session not found" });
+    }
+    if (actorUserId !== session.astrologerUserId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the astrologer can accept this request",
+      });
+    }
+    if (effectiveRequestStatus(session) !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Session is not pending acceptance",
+      });
+    }
+    const now = new Date();
+    await session.update({
+      requestStatus: "accepted",
+      chatStartedAt: now,
+    });
+    await session.reload();
+    broadcastSessionUpdated(session, {
+      requestStatus: "accepted",
+      chatStartedAt: now.toISOString(),
+      action: "accepted",
+    });
+    const customerUser = await User.findByPk(session.customerUserId, {
+      attributes: ["id", "fcmToken"],
+    });
+    await sendPushToUser(customerUser, {
+      title: "Chat accepted",
+      body: "Your astrologer is ready to chat",
+      data: {
+        type: "chat_accepted",
+        sessionId: String(session.id),
+      },
+    });
+    res.status(200).json({
+      success: true,
+      message: "Chat request accepted",
+      data: { session: sessionToJson(session) },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error accepting session",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/consultation/sessions/:sessionId/decline
+ * Body: { actorUserId }
+ */
+exports.declineSession = async (req, res) => {
+  try {
+    const sessionId = parseInt(req.params.sessionId, 10);
+    const actorUserId = parseInt(req.body?.actorUserId, 10);
+    if (!sessionId || !actorUserId) {
+      return res.status(400).json({
+        success: false,
+        message: "sessionId and actorUserId are required",
+      });
+    }
+    const session = await ConsultationSession.findByPk(sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, message: "Session not found" });
+    }
+    if (actorUserId !== session.astrologerUserId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the astrologer can decline this request",
+      });
+    }
+    if (effectiveRequestStatus(session) !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Session is not pending",
+      });
+    }
+    const now = new Date();
+    await session.update({
+      requestStatus: "declined",
+      status: "closed",
+      chatEndedAt: now,
+    });
+    await session.reload();
+    broadcastSessionUpdated(session, {
+      requestStatus: "declined",
+      action: "declined",
+    });
+    const customerUser = await User.findByPk(session.customerUserId, {
+      attributes: ["id", "fcmToken"],
+    });
+    await sendPushToUser(customerUser, {
+      title: "Chat declined",
+      body: "The astrologer is unavailable right now",
+      data: {
+        type: "chat_declined",
+        sessionId: String(session.id),
+      },
+    });
+    res.status(200).json({
+      success: true,
+      message: "Chat request declined",
+      data: { session: sessionToJson(session) },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error declining session",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/consultation/sessions/:sessionId/end
+ * Body: { actorUserId } — ends chat, settles wallet per minute since accept.
+ */
+exports.endChatSession = async (req, res) => {
+  const tx = await db.sequelize.transaction();
+  try {
+    const sessionId = parseInt(req.params.sessionId, 10);
+    const actorUserId = parseInt(req.body?.actorUserId, 10);
+    if (!sessionId || !actorUserId) {
+      await tx.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "sessionId and actorUserId are required",
+      });
+    }
+    const session = await ConsultationSession.findByPk(sessionId, {
+      transaction: tx,
+      lock: tx.LOCK.UPDATE,
+    });
+    if (!session) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: "Session not found" });
+    }
+    if (
+      actorUserId !== session.customerUserId &&
+      actorUserId !== session.astrologerUserId
+    ) {
+      await tx.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Not a participant in this session",
+      });
+    }
+    if (session.status === "closed") {
+      await tx.rollback();
+      return res.status(200).json({
+        success: true,
+        message: "Session already ended",
+        data: {
+          session: sessionToJson(session),
+          walletSettlement: null,
+        },
+      });
+    }
+    if (effectiveRequestStatus(session) !== "accepted") {
+      await tx.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Chat was not active",
+      });
+    }
+
+    const ended = new Date();
+    const started = session.chatStartedAt
+      ? new Date(session.chatStartedAt)
+      : new Date(session.createdAt);
+    const durationSeconds = Math.max(
+      0,
+      Math.floor((ended - started) / 1000)
+    );
+
+    const astrologer = await Astrologer.findByPk(session.astrologerId, {
+      transaction: tx,
+    });
+    let walletSettlement = null;
+    if (astrologer) {
+      walletSettlement = await settleSessionChat(tx, {
+        sessionId: session.id,
+        userId: session.customerUserId,
+        astrologerId: session.astrologerId,
+        durationSeconds,
+        feePerMin: astrologer.consultationFeePerMin,
+      });
+    }
+
+    await session.update(
+      {
+        status: "closed",
+        chatEndedAt: ended,
+        billedAmount: walletSettlement?.amount ?? 0,
+      },
+      { transaction: tx }
+    );
+    await session.reload({ transaction: tx });
+    await tx.commit();
+
+    broadcastSessionUpdated(session, {
+      requestStatus: "accepted",
+      status: "closed",
+      action: "ended",
+      walletSettlement,
+    });
+
+    const otherId =
+      actorUserId === session.customerUserId
+        ? session.astrologerUserId
+        : session.customerUserId;
+    const otherUser = await User.findByPk(otherId, {
+      attributes: ["id", "fcmToken"],
+    });
+    await sendPushToUser(otherUser, {
+      title: "Chat ended",
+      body: "The consultation has ended",
+      data: {
+        type: "chat_ended",
+        sessionId: String(session.id),
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Chat ended",
+      data: {
+        session: sessionToJson(session),
+        durationSeconds,
+        walletSettlement,
+      },
+    });
+  } catch (error) {
+    await tx.rollback();
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    res.status(code).json({
+      success: false,
+      message: error.message || "Error ending chat",
     });
   }
 };
@@ -482,6 +843,15 @@ exports.sendMessage = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: "Sender is not a participant in this session",
+      });
+    }
+    if (!isChatAccepted(session)) {
+      return res.status(403).json({
+        success: false,
+        message:
+          effectiveRequestStatus(session) === "pending"
+            ? "Waiting for astrologer to accept the chat request"
+            : "Chat is not active",
       });
     }
 
@@ -706,6 +1076,12 @@ exports.startCall = async (req, res) => {
       starter !== session.astrologerUserId
     ) {
       return res.status(403).json({ success: false, message: "Not a participant" });
+    }
+    if (!isChatAccepted(session)) {
+      return res.status(403).json({
+        success: false,
+        message: "Chat must be accepted before starting a call",
+      });
     }
 
     const log = await CallLog.create({

@@ -78,3 +78,15 @@ exports.broadcastCallEnded = (session, payload) => {
   io.to(userRoom(session.customerUserId)).emit("call_ended", p);
   io.to(userRoom(session.astrologerUserId)).emit("call_ended", p);
 };
+
+/** Chat request accepted / declined / ended — refresh both clients. */
+exports.broadcastSessionUpdated = (session, payload) => {
+  if (!io || !session) return;
+  const sid = session.id;
+  const p = { sessionId: sid, ...(payload || {}) };
+  io.to(consultationRoom(sid)).emit("session_updated", p);
+  io.to(userRoom(session.customerUserId)).emit("session_updated", p);
+  io.to(userRoom(session.astrologerUserId)).emit("session_updated", p);
+  io.to(userRoom(session.customerUserId)).emit("inbox_updated", { sessionId: sid });
+  io.to(userRoom(session.astrologerUserId)).emit("inbox_updated", { sessionId: sid });
+};

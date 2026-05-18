@@ -18,6 +18,10 @@ function consultationReferenceId(callLogId) {
   return `call_${callLogId}`;
 }
 
+function sessionChatReferenceId(sessionId) {
+  return `session_${sessionId}`;
+}
+
 /**
  * Billable minutes: any started second counts as a full minute (ceiling).
  */
@@ -243,10 +247,71 @@ async function settleCallConsultation(tx, params) {
   };
 }
 
+/**
+ * Settle a completed chat session: duration since chatStartedAt x feePerMin.
+ */
+async function settleSessionChat(tx, params) {
+  const {
+    sessionId,
+    userId,
+    astrologerId,
+    durationSeconds,
+    feePerMin,
+  } = params;
+
+  const referenceId = sessionChatReferenceId(sessionId);
+  const pricing = calculateConsultationAmount(durationSeconds, feePerMin);
+
+  if (pricing.amount <= 0) {
+    return {
+      settled: false,
+      skipped: true,
+      reason:
+        pricing.billableMinutes <= 0
+          ? "zero_duration"
+          : "zero_consultation_rate",
+      amount: 0,
+      billableMinutes: pricing.billableMinutes,
+      feePerMin: pricing.feePerMin,
+      referenceId,
+    };
+  }
+
+  const transfer = await transferUserToAstrologer(tx, {
+    userId,
+    astrologerId,
+    amount: pricing.amount,
+    referenceId,
+    description: `Consultation chat (${pricing.billableMinutes} min)`,
+    metadata: {
+      sessionId,
+      durationSeconds,
+      billableMinutes: pricing.billableMinutes,
+      feePerMin: pricing.feePerMin,
+      kind: "chat",
+    },
+  });
+
+  return {
+    settled: true,
+    skipped: false,
+    amount: transfer.amount,
+    billableMinutes: pricing.billableMinutes,
+    feePerMin: pricing.feePerMin,
+    durationSeconds,
+    referenceId,
+    alreadyProcessed: transfer.alreadyProcessed,
+    user: transfer.user,
+    astrologer: transfer.astrologer,
+  };
+}
+
 module.exports = {
   calculateConsultationAmount,
   billableMinutesFromDuration,
   consultationReferenceId,
+  sessionChatReferenceId,
   transferUserToAstrologer,
   settleCallConsultation,
+  settleSessionChat,
 };
