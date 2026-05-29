@@ -1,5 +1,6 @@
 const db = require("../../../models");
 const User = db.user;
+const Astrologer = db.astrologer;
 const Kundli = db.kundli;
 const Notification = db.notification;
 const { signUserToken } = require("../../auth/jwt.service");
@@ -217,13 +218,15 @@ exports.verifyOtp = async (req, res) => {
       responseUser = await User.findByPk(user.id);
     }
 
+    const userPayload = await attachAstrologerProfileId(responseUser);
+
     res.status(200).json({
       success: true,
       message: usedMasterOtp
         ? "OTP verified successfully (master)"
         : "OTP verified successfully",
       data: {
-        user: toUserResponse(responseUser),
+        user: userPayload,
         existingUser,
         ...(usedMasterOtp && { usedMasterOtp: true }),
       },
@@ -562,8 +565,23 @@ function toUserResponse(user) {
   return u;
 }
 
+/** Adds `astrologerId` (astrologers.id) when user role is astrologer. */
+async function attachAstrologerProfileId(user) {
+  const u = toUserResponse(user);
+  const role = String(u.role || "").toLowerCase();
+  if (role !== "astrologer" || !u.phone) return u;
+
+  const astro = await Astrologer.findOne({
+    where: { phone: String(u.phone).trim() },
+    attributes: ["id"],
+  });
+  if (astro) u.astrologerId = astro.id;
+  return u;
+}
+
 /** For astrologer register and other modules */
 exports.toUserResponse = toUserResponse;
+exports.attachAstrologerProfileId = attachAstrologerProfileId;
 
 /**
  * PUT /api/v1/user/:id/push-token
@@ -573,10 +591,17 @@ exports.updatePushToken = async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const token = String(req.body?.token || "").trim();
+    const { isValidFcmToken } = require("../../notifications/push.service");
     if (!id || !token) {
       return res.status(400).json({
         success: false,
         message: "id and token are required",
+      });
+    }
+    if (!isValidFcmToken(token)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid FCM token",
       });
     }
     const user = await User.findByPk(id);
@@ -883,7 +908,7 @@ exports.findOne = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: toUserResponse(user),
+      data: await attachAstrologerProfileId(user),
     });
   } catch (error) {
     res.status(500).json({
