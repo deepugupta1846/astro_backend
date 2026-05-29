@@ -105,6 +105,12 @@ exports.createOrGetSession = async (req, res) => {
         message: "Astrologer not found",
       });
     }
+    if (!astro.chatEnabled) {
+      return res.status(403).json({
+        success: false,
+        message: "This astrologer is not accepting chat requests right now",
+      });
+    }
 
     const astroUser = await User.findOne({
       where: { phone: astro.phone },
@@ -879,7 +885,7 @@ exports.sendMessage = async (req, res) => {
         : "New message";
     const bodyPreview =
       messageType === "image" ? "sent you a photo" : text.slice(0, 100);
-    await sendPushToUser(recipientUser, {
+    const pushResult = await sendPushToUser(recipientUser, {
       title: senderName,
       body: bodyPreview,
       data: {
@@ -888,6 +894,17 @@ exports.sendMessage = async (req, res) => {
         senderUserId: String(sid),
       },
     });
+    if (
+      process.env.NODE_ENV !== "production" &&
+      pushResult &&
+      !pushResult.ok &&
+      !pushResult.skipped
+    ) {
+      console.warn(
+        `[push] chat_message session=${session.id} recipient=${recipientId}:`,
+        pushResult.error || pushResult.reason
+      );
+    }
 
     res.status(201).json({
       success: true,
@@ -1082,6 +1099,24 @@ exports.startCall = async (req, res) => {
         success: false,
         message: "Chat must be accepted before starting a call",
       });
+    }
+
+    if (session.astrologerId) {
+      const astro = await Astrologer.findByPk(session.astrologerId, {
+        attributes: ["id", "callEnabled", "isActive"],
+      });
+      if (!astro || !astro.isActive) {
+        return res.status(404).json({
+          success: false,
+          message: "Astrologer not found",
+        });
+      }
+      if (!astro.callEnabled) {
+        return res.status(403).json({
+          success: false,
+          message: "This astrologer is not accepting calls right now",
+        });
+      }
     }
 
     const log = await CallLog.create({

@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const db = require("../../../models");
 const Astrologer = db.astrologer;
 const User = db.user;
@@ -38,12 +39,24 @@ const LIST_EXCLUDE_ATTRIBUTES = [
 
 /**
  * GET /api/v1/astrologer
- * Active astrologers for app home (no contact / KYC).
+ * Query: ?service=chat|call|any (default any)
+ * Returns active astrologers with at least chat or call enabled (per filter).
  */
 exports.list = async (req, res) => {
   try {
+    const service = String(req.query.service || "any").toLowerCase();
+    const where = { isActive: true };
+
+    if (service === "chat") {
+      where.chatEnabled = true;
+    } else if (service === "call") {
+      where.callEnabled = true;
+    } else {
+      where[Op.or] = [{ chatEnabled: true }, { callEnabled: true }];
+    }
+
     const rows = await Astrologer.findAll({
-      where: { isActive: true },
+      where,
       order: [
         ["isOnline", "DESC"],
         ["averageRating", "DESC"],
@@ -95,6 +108,91 @@ exports.findOne = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || "Error fetching astrologer",
+    });
+  }
+};
+
+/**
+ * PATCH /api/v1/astrologer/:id/availability
+ * Body: { userId, chatEnabled?, callEnabled? }
+ * Lets the logged-in astrologer turn chat/call on or off.
+ * Sets isOnline automatically when any service is enabled.
+ */
+exports.updateAvailability = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const userId = parseInt(req.body?.userId, 10);
+    if (!id || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid astrologer id and userId are required",
+      });
+    }
+
+    const astrologer = await Astrologer.findByPk(id);
+    if (!astrologer || !astrologer.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: "Astrologer not found",
+      });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+    if (String(user.role || "").toLowerCase() !== "astrologer") {
+      return res.status(403).json({
+        success: false,
+        message: "Only astrologer accounts can update availability",
+      });
+    }
+    if (String(user.phone || "").trim() !== String(astrologer.phone || "").trim()) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only update your own availability",
+      });
+    }
+
+    const payload = {};
+    if (typeof req.body.chatEnabled === "boolean") {
+      payload.chatEnabled = req.body.chatEnabled;
+    }
+    if (typeof req.body.callEnabled === "boolean") {
+      payload.callEnabled = req.body.callEnabled;
+    }
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide chatEnabled and/or callEnabled (boolean)",
+      });
+    }
+
+    const nextChat =
+      payload.chatEnabled !== undefined
+        ? payload.chatEnabled
+        : astrologer.chatEnabled;
+    const nextCall =
+      payload.callEnabled !== undefined
+        ? payload.callEnabled
+        : astrologer.callEnabled;
+    payload.isOnline = Boolean(nextChat || nextCall);
+
+    await astrologer.update(payload);
+    await astrologer.reload();
+
+    res.status(200).json({
+      success: true,
+      message: "Availability updated",
+      data: toAstrologerResponse(astrologer),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error updating availability",
     });
   }
 };
@@ -419,11 +517,14 @@ exports.register = async (req, res) => {
     const astrologer = await Astrologer.create(astroPayload);
     const refreshedUser = await User.findByPk(user.id);
 
+    const userResponse = toUserResponse(refreshedUser);
+    userResponse.astrologerId = astrologer.id;
+
     res.status(201).json({
       success: true,
       message: "Registered as astrologer successfully",
       data: {
-        user: toUserResponse(refreshedUser),
+        user: userResponse,
         astrologer: toAstrologerResponse(astrologer),
       },
     });
