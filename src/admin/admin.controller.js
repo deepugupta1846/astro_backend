@@ -1237,3 +1237,122 @@ exports.deletePuja = async (req, res) => {
     });
   }
 };
+
+const {
+  listAllWithdrawalsAdmin,
+  getWithdrawalByIdAdmin,
+  updateWithdrawalAdmin,
+  deleteWithdrawalAdmin,
+} = require("../wallet/withdrawal.service");
+
+function parseOptionalInt(v) {
+  if (v == null || v === "") return null;
+  const n = parseInt(String(v), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * GET /api/v1/admin/withdrawals
+ * Query: status?, astrologerId?, limit?, offset?
+ */
+exports.listWithdrawals = async (req, res) => {
+  try {
+    const status = req.query.status
+      ? String(req.query.status).trim().toLowerCase()
+      : null;
+    const data = await listAllWithdrawalsAdmin({
+      status,
+      astrologerId: parseOptionalInt(req.query.astrologerId),
+      limit: parseOptionalInt(req.query.limit) || 50,
+      offset: parseInt(String(req.query.offset || "0"), 10) || 0,
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error listing withdrawals",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/admin/withdrawals/:id
+ */
+exports.getWithdrawal = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid withdrawal id is required",
+      });
+    }
+    const data = await getWithdrawalByIdAdmin(id);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error fetching withdrawal",
+    });
+  }
+};
+
+/**
+ * PUT /api/v1/admin/withdrawals/:id
+ * Body: { status?, rejectionReason?, amount?, bank fields... }
+ */
+exports.updateWithdrawal = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid withdrawal id is required",
+      });
+    }
+    const data = await updateWithdrawalAdmin(id, req.body);
+    return res.status(200).json({
+      success: true,
+      message: "Withdrawal updated",
+      data,
+    });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error updating withdrawal",
+    });
+  }
+};
+
+/**
+ * DELETE /api/v1/admin/withdrawals/:id
+ */
+exports.deleteWithdrawal = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid withdrawal id is required",
+      });
+    }
+    await deleteWithdrawalAdmin(id);
+    return res.status(200).json({
+      success: true,
+      message: "Withdrawal deleted",
+    });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error deleting withdrawal",
+    });
+  }
+};

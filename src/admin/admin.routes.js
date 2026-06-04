@@ -98,4 +98,25 @@ module.exports = (app) => {
     adminController.updatePuja
   );
   app.delete("/api/v1/admin/pujas/:id", requireAdmin, adminController.deletePuja);
+
+  app.get(
+    "/api/v1/admin/withdrawals",
+    requireAdmin,
+    adminController.listWithdrawals
+  );
+  app.get(
+    "/api/v1/admin/withdrawals/:id",
+    requireAdmin,
+    adminController.getWithdrawal
+  );
+  app.put(
+    "/api/v1/admin/withdrawals/:id",
+    requireAdmin,
+    adminController.updateWithdrawal
+  );
+  app.delete(
+    "/api/v1/admin/withdrawals/:id",
+    requireAdmin,
+    adminController.deleteWithdrawal
+  );
 };

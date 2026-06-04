@@ -41,6 +41,14 @@ module.exports = (app) => {
     "/api/v1/wallet/astrologer/:astrologerId/razorpay/order-status/:orderId",
     walletController.getAstrologerRazorpayOrderStatus
   );
+  app.post(
+    "/api/v1/wallet/astrologer/:astrologerId/withdraw",
+    walletController.createAstrologerWithdrawal
+  );
+  app.get(
+    "/api/v1/wallet/astrologer/:astrologerId/withdrawals",
+    walletController.listAstrologerWithdrawals
+  );
 
   // Consultation settlement
   app.post(

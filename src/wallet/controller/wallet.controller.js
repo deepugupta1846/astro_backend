@@ -11,6 +11,11 @@ const {
   transferUserToAstrologer: executeUserToAstrologerTransfer,
   settleCallConsultation,
 } = require("../wallet.service");
+const {
+  MIN_WITHDRAWAL_AMOUNT,
+  createAstrologerWithdrawal,
+  listAstrologerWithdrawals,
+} = require("../withdrawal.service");
 
 const razorpayClient =
   process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
@@ -819,3 +824,81 @@ exports.getAstrologerWalletHistory = (req, res) =>
   getWalletHistory("astrologer", req, res);
 exports.getAstrologerRazorpayOrderStatus = (req, res) =>
   getRazorpayOrderStatusFor("astrologer", req, res);
+
+/**
+ * POST /api/v1/wallet/astrologer/:astrologerId/withdraw
+ * Body: { userId, amount, accountHolderName, accountNumber, ifscCode, bankName, branchName? }
+ */
+exports.createAstrologerWithdrawal = async (req, res) => {
+  try {
+    const astrologerId = parsePositiveInt(req.params.astrologerId);
+    const userId = parsePositiveInt(req.body?.userId);
+    if (!astrologerId || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid astrologerId and userId are required",
+      });
+    }
+
+    const result = await createAstrologerWithdrawal({
+      astrologerId,
+      userId,
+      amount: req.body?.amount,
+      bank: req.body,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Withdrawal request submitted",
+      data: {
+        ...result.withdrawal,
+        walletBalance: result.walletBalance,
+        minWithdrawalAmount: MIN_WITHDRAWAL_AMOUNT,
+      },
+    });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error creating withdrawal request",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/wallet/astrologer/:astrologerId/withdrawals?userId=&limit=&offset=
+ */
+exports.listAstrologerWithdrawals = async (req, res) => {
+  try {
+    const astrologerId = parsePositiveInt(req.params.astrologerId);
+    const userId = parsePositiveInt(req.query?.userId);
+    if (!astrologerId || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid astrologerId and userId query are required",
+      });
+    }
+
+    const limit = parsePositiveInt(req.query?.limit) || 20;
+    const offset = parseInt(String(req.query?.offset || "0"), 10) || 0;
+
+    const data = await listAstrologerWithdrawals(astrologerId, userId, {
+      limit,
+      offset,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data,
+      minWithdrawalAmount: MIN_WITHDRAWAL_AMOUNT,
+    });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error listing withdrawals",
+    });
+  }
+};

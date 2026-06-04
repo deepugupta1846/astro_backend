@@ -143,6 +143,7 @@ exports.createOrGetSession = async (req, res) => {
       order: [["id", "DESC"]],
     });
 
+    let notifyAstrologer = false;
     if (!session) {
       session = await ConsultationSession.create({
         customerUserId: cid,
@@ -154,6 +155,17 @@ exports.createOrGetSession = async (req, res) => {
       });
       await session.update({ channelName: channelNameForSession(session.id) });
       await session.reload();
+      notifyAstrologer = true;
+      broadcastSessionUpdated(session, {
+        requestStatus: "pending",
+        action: "created",
+      });
+    } else if (effectiveRequestStatus(session) === "pending") {
+      // Customer returned to an existing pending request — remind astrologer.
+      notifyAstrologer = true;
+    }
+
+    if (notifyAstrologer) {
       const customerUser = await User.findByPk(cid, {
         attributes: ["id", "name", "fcmToken"],
       });
@@ -169,10 +181,6 @@ exports.createOrGetSession = async (req, res) => {
           sessionId: String(session.id),
           customerUserId: String(cid),
         },
-      });
-      broadcastSessionUpdated(session, {
-        requestStatus: "pending",
-        action: "created",
       });
     }
 

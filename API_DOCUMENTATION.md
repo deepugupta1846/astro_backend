@@ -571,6 +571,89 @@ Same shape as user wallet; `entityType` is `"astrologer"`.
 
 ---
 
+### POST `/api/v1/wallet/astrologer/:astrologerId/withdraw`
+
+Astrologer requests a bank withdrawal (minimum **₹1000**). Amount is held from wallet immediately; status stays `pending` until admin approves.
+
+- **Body:**
+
+| Field | Type | Required |
+| ----- | ---- | -------- |
+| `userId` | number | Yes (logged-in astrologer user id) |
+| `amount` | number | Yes, min 1000 |
+| `accountHolderName` | string | Yes |
+| `accountNumber` | string | Yes (9–18 digits) |
+| `ifscCode` | string | Yes |
+| `bankName` | string | Yes |
+| `branchName` | string | No |
+
+- Dummy payload:
+```json
+{
+  "userId": 22,
+  "amount": 1500,
+  "accountHolderName": "Acharya Ravi",
+  "accountNumber": "123456789012",
+  "ifscCode": "SBIN0001234",
+  "bankName": "State Bank of India",
+  "branchName": "Main Branch"
+}
+```
+
+- Dummy response (`201`):
+```json
+{
+  "success": true,
+  "message": "Withdrawal request submitted",
+  "data": {
+    "id": 3,
+    "astrologerId": 4,
+    "amount": 1500,
+    "status": "pending",
+    "accountNumber": "********9012",
+    "walletBalance": 1700.75,
+    "minWithdrawalAmount": 1000
+  }
+}
+```
+
+- Dummy error (below minimum):
+```json
+{
+  "success": false,
+  "message": "Minimum withdrawal amount is ₹1000"
+}
+```
+
+---
+
+### GET `/api/v1/wallet/astrologer/:astrologerId/withdrawals`
+
+Astrologer's own withdrawal history.
+
+- **Query:** `userId` (required), `limit` (default 20, max 50), `offset` (default 0)
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 3,
+      "astrologerId": 4,
+      "amount": 1500,
+      "status": "pending",
+      "bankName": "State Bank of India",
+      "accountNumber": "********9012",
+      "createdAt": "2026-06-02T10:00:00.000Z"
+    }
+  ],
+  "minWithdrawalAmount": 1000
+}
+```
+
+---
+
 ### POST `/api/v1/wallet/transfer/user-to-astrologer`
 
 Internal settlement: debit user wallet, credit astrologer wallet, append two ledger rows (`source: consultation`). Uses a DB transaction.
@@ -1461,6 +1544,118 @@ Lists notifications for the **authenticated admin user** (e.g. system alerts, ne
 {
   "success": true,
   "message": "Remedy deleted"
+}
+```
+
+### GET `/api/v1/admin/withdrawals`
+
+List all astrologer withdrawal requests (full bank details for admin).
+
+- **Query (optional):** `status` (`pending` | `approved` | `rejected` | `cancelled`), `astrologerId`, `limit` (default 50, max 100), `offset`
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 3,
+      "astrologerId": 4,
+      "requestedByUserId": 22,
+      "amount": 1500,
+      "status": "pending",
+      "accountHolderName": "Acharya Ravi",
+      "accountNumber": "123456789012",
+      "ifscCode": "SBIN0001234",
+      "bankName": "State Bank of India",
+      "branchName": "Main Branch",
+      "rejectionReason": null,
+      "walletTransactionId": 88,
+      "astrologer": {
+        "id": 4,
+        "name": "Acharya Ravi",
+        "phone": "9876543210",
+        "walletBalance": 1700.75
+      },
+      "createdAt": "2026-06-02T10:00:00.000Z",
+      "updatedAt": "2026-06-02T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+### GET `/api/v1/admin/withdrawals/:id`
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": {
+    "id": 3,
+    "astrologerId": 4,
+    "amount": 1500,
+    "status": "pending",
+    "accountHolderName": "Acharya Ravi",
+    "accountNumber": "123456789012",
+    "ifscCode": "SBIN0001234",
+    "bankName": "State Bank of India"
+  }
+}
+```
+
+### PUT `/api/v1/admin/withdrawals/:id`
+
+Update withdrawal (typically change status). Only **pending** requests can change status.
+
+| Field | Type | Notes |
+| ----- | ---- | ----- |
+| `status` | string | `approved`, `rejected`, or `cancelled` |
+| `rejectionReason` | string | Required when `status` is `rejected` |
+| `amount` | number | Only while `pending`; min ₹1000 |
+| `accountHolderName`, `accountNumber`, `ifscCode`, `bankName`, `branchName` | | Editable while `pending` |
+
+- **Approve** — marks request approved; wallet debit transaction becomes `success` (funds already held).
+- **Reject / Cancel** — refunds amount to astrologer wallet; transaction marked `failed`.
+
+- Dummy payload (approve):
+```json
+{
+  "status": "approved"
+}
+```
+
+- Dummy payload (reject):
+```json
+{
+  "status": "rejected",
+  "rejectionReason": "Invalid bank account details"
+}
+```
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "message": "Withdrawal updated",
+  "data": {
+    "id": 3,
+    "status": "approved",
+    "amount": 1500
+  }
+}
+```
+
+### DELETE `/api/v1/admin/withdrawals/:id`
+
+- **Pending:** refunds wallet balance and deletes the request.
+- **Approved:** not allowed (`400`).
+- **Rejected / Cancelled:** deletes record only (already refunded on reject).
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "message": "Withdrawal deleted"
 }
 ```
 

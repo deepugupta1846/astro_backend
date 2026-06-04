@@ -57,6 +57,17 @@ db.walletTransaction = require("../src/wallet/model/wallet_transaction.model.js"
   sequelize,
   Sequelize
 );
+db.astrologerWithdrawalRequest = require("../src/wallet/model/astrologer_withdrawal_request.model.js")(
+  sequelize,
+  Sequelize
+);
+
+db.astrologerWithdrawalRequest.belongsTo(db.astrologer, {
+  foreignKey: "astrologerId",
+});
+db.astrologer.hasMany(db.astrologerWithdrawalRequest, {
+  foreignKey: "astrologerId",
+});
 
 db.consultationSession.belongsTo(db.user, {
   foreignKey: "customerUserId",
