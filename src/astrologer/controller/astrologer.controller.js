@@ -227,6 +227,7 @@ exports.create = async (req, res) => {
       birthDate,
       birthTime,
       birthPlace,
+      address,
       isVerified,
       isActive,
       isOnline,
@@ -315,6 +316,10 @@ exports.create = async (req, res) => {
       birthPlace:
         birthPlace != null && String(birthPlace).trim()
           ? String(birthPlace).trim()
+          : null,
+      address:
+        req.body.address != null && String(req.body.address).trim()
+          ? String(req.body.address).trim()
           : null,
       isVerified: typeof isVerified === "boolean" ? isVerified : false,
       isActive: typeof isActive === "boolean" ? isActive : true,
@@ -506,6 +511,10 @@ exports.register = async (req, res) => {
         birthPlace != null && String(birthPlace).trim()
           ? String(birthPlace).trim()
           : null,
+      address:
+        req.body.address != null && String(req.body.address).trim()
+          ? String(req.body.address).trim()
+          : null,
       isVerified: false,
       isActive: true,
       isOnline: false,
@@ -538,6 +547,235 @@ exports.register = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || "Error registering astrologer",
+    });
+  }
+};
+
+function buildAstroPayloadFromBody(body, defaults = {}) {
+  const {
+    name,
+    phone,
+    countryCode = "+91",
+    email,
+    gender,
+    profileImageUrl,
+    idProofType,
+    idProofNumber,
+    idProofImageUrl,
+    idProofBackImageUrl,
+    bio,
+    experienceYears,
+    education,
+    specialties,
+    languages,
+    skills,
+    consultationFeePerMin,
+    chatEnabled,
+    callEnabled,
+    videoEnabled,
+    birthDate,
+    birthTime,
+    birthPlace,
+    address,
+    isVerified,
+    isActive,
+    isOnline,
+  } = body;
+
+  const idTypeNorm =
+    idProofType != null ? String(idProofType).trim().toLowerCase() : "";
+
+  return {
+    name: String(name).trim(),
+    phone: String(phone).trim(),
+    countryCode: countryCode ? String(countryCode).trim() : "+91",
+    email:
+      email != null && String(email).trim() ? String(email).trim() : null,
+    gender: ["male", "female", "other"].includes(gender) ? gender : null,
+    profileImageUrl:
+      profileImageUrl != null && String(profileImageUrl).trim()
+        ? String(profileImageUrl).trim()
+        : null,
+    idProofType: idTypeNorm || null,
+    idProofNumber:
+      idProofNumber != null && String(idProofNumber).trim()
+        ? String(idProofNumber).trim().slice(0, 64)
+        : null,
+    idProofImageUrl:
+      idProofImageUrl != null && String(idProofImageUrl).trim()
+        ? String(idProofImageUrl).trim()
+        : null,
+    idProofBackImageUrl:
+      idProofBackImageUrl != null && String(idProofBackImageUrl).trim()
+        ? String(idProofBackImageUrl).trim()
+        : null,
+    bio: bio != null && String(bio).trim() ? String(bio).trim() : null,
+    experienceYears:
+      experienceYears != null && experienceYears !== ""
+        ? Number(experienceYears)
+        : null,
+    education:
+      education != null && String(education).trim()
+        ? String(education).trim()
+        : null,
+    specialties: Array.isArray(specialties) ? specialties : null,
+    languages: Array.isArray(languages) ? languages : null,
+    skills: Array.isArray(skills) ? skills : null,
+    consultationFeePerMin:
+      consultationFeePerMin != null && consultationFeePerMin !== ""
+        ? Number(consultationFeePerMin)
+        : null,
+    chatEnabled: typeof chatEnabled === "boolean" ? chatEnabled : true,
+    callEnabled: typeof callEnabled === "boolean" ? callEnabled : true,
+    videoEnabled: typeof videoEnabled === "boolean" ? videoEnabled : false,
+    birthDate: birthDate || null,
+    birthTime:
+      birthTime != null && String(birthTime).trim()
+        ? String(birthTime).trim()
+        : null,
+    birthPlace:
+      birthPlace != null && String(birthPlace).trim()
+        ? String(birthPlace).trim()
+        : null,
+    address:
+      address != null && String(address).trim()
+        ? String(address).trim()
+        : null,
+    isVerified:
+      typeof isVerified === "boolean" ? isVerified : defaults.isVerified ?? false,
+    isActive: typeof isActive === "boolean" ? isActive : true,
+    isOnline: typeof isOnline === "boolean" ? isOnline : false,
+    averageRating: 0,
+    totalConsultations: 0,
+    totalReviews: 0,
+  };
+}
+
+/**
+ * POST /api/v1/admin/astrologers (full create)
+ * Creates astrologer profile + users row with role astrologer.
+ * Requires KYC fields like mobile register flow.
+ */
+exports.createWithUser = async (req, res) => {
+  try {
+    const {
+      name,
+      phone,
+      idProofType,
+      idProofNumber,
+      idProofImageUrl,
+    } = req.body;
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Name is required",
+      });
+    }
+    if (!phone || !String(phone).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone is required",
+      });
+    }
+
+    const idTypeNorm =
+      idProofType != null ? String(idProofType).trim().toLowerCase() : "";
+    if (!ID_PROOF_TYPES.includes(idTypeNorm)) {
+      return res.status(400).json({
+        success: false,
+        message: `idProofType must be one of: ${ID_PROOF_TYPES.join(", ")}`,
+      });
+    }
+    if (!idProofNumber || !String(idProofNumber).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "idProofNumber is required",
+      });
+    }
+    if (!idProofImageUrl || !String(idProofImageUrl).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "idProofImageUrl is required (upload ID proof image first)",
+      });
+    }
+
+    const normalizedPhone = String(phone).trim();
+
+    const existingAstro = await Astrologer.findOne({
+      where: { phone: normalizedPhone },
+    });
+    if (existingAstro) {
+      return res.status(409).json({
+        success: false,
+        message: "An astrologer with this phone number already exists",
+      });
+    }
+
+    let user = await User.findOne({ where: { phone: normalizedPhone } });
+    if (user && String(user.role || "").toLowerCase() === "admin") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot convert an admin account to astrologer",
+      });
+    }
+
+    const astroPayload = buildAstroPayloadFromBody(req.body, {
+      isVerified: true,
+    });
+    astroPayload.idProofType = idTypeNorm;
+
+    const userPayload = {
+      phone: normalizedPhone,
+      countryCode: astroPayload.countryCode,
+      name: astroPayload.name,
+      gender: astroPayload.gender,
+      role: "astrologer",
+      isActive: true,
+    };
+    if (astroPayload.email) userPayload.email = astroPayload.email;
+    if (astroPayload.profileImageUrl) {
+      userPayload.profileImageUrl = astroPayload.profileImageUrl;
+    }
+    if (astroPayload.birthDate) userPayload.birthDate = astroPayload.birthDate;
+    if (astroPayload.birthTime) userPayload.birthTime = astroPayload.birthTime;
+    if (astroPayload.birthPlace) userPayload.birthPlace = astroPayload.birthPlace;
+
+    if (user) {
+      if (String(user.role || "").toLowerCase() === "astrologer") {
+        return res.status(409).json({
+          success: false,
+          message: "User already has astrologer role for this phone",
+        });
+      }
+      await user.update(userPayload);
+    } else {
+      user = await User.create(userPayload);
+    }
+
+    const astrologer = await Astrologer.create(astroPayload);
+    const refreshedUser = await User.findByPk(user.id);
+    const userResponse = toUserResponse(refreshedUser);
+    userResponse.astrologerId = astrologer.id;
+
+    res.status(201).json({
+      success: true,
+      message: "Astrologer account created with user profile",
+      data: {
+        user: userResponse,
+        astrologer: toAstrologerResponse(astrologer),
+      },
+    });
+  } catch (error) {
+    if (error.name === "SequelizeUniqueConstraintError") {
+      return res.status(409).json({
+        success: false,
+        message: "Phone or email already in use",
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error creating astrologer account",
     });
   }
 };

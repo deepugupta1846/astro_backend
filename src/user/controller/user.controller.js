@@ -970,6 +970,29 @@ exports.update = async (req, res) => {
 };
 
 /**
+ * POST /api/v1/user/request-account-deletion
+ * Body: { phone, countryCode?, otp, reason? }
+ */
+exports.requestAccountDeletion = async (req, res) => {
+  try {
+    const { requestAccountDeletion } = require("../account-deletion.service");
+    const data = await requestAccountDeletion(req.body);
+    return res.status(201).json({
+      success: true,
+      message:
+        "Account deletion request submitted. Our team will process it shortly.",
+      data,
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message || "Error submitting deletion request",
+    });
+  }
+};
+
+/**
  * Delete user
  */
 exports.delete = async (req, res) => {

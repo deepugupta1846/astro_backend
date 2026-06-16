@@ -61,6 +61,10 @@ db.astrologerWithdrawalRequest = require("../src/wallet/model/astrologer_withdra
   sequelize,
   Sequelize
 );
+db.accountDeletionRequest = require("../src/user/model/account_deletion_request.model.js")(
+  sequelize,
+  Sequelize
+);
 
 db.astrologerWithdrawalRequest.belongsTo(db.astrologer, {
   foreignKey: "astrologerId",
@@ -88,5 +92,7 @@ db.kundli.belongsTo(db.user, { foreignKey: "userId" });
 db.user.hasMany(db.kundli, { foreignKey: "userId" });
 db.notification.belongsTo(db.user, { foreignKey: "userId" });
 db.user.hasMany(db.notification, { foreignKey: "userId" });
+db.accountDeletionRequest.belongsTo(db.user, { foreignKey: "userId" });
+db.user.hasMany(db.accountDeletionRequest, { foreignKey: "userId" });
 
 module.exports = db;
