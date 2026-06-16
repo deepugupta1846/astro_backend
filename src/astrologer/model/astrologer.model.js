@@ -166,6 +166,11 @@ module.exports = (sequelize, Sequelize) => {
         type: Sequelize.STRING(200),
         allowNull: true,
       },
+      address: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+        comment: "Residential / correspondence address",
+      },
       // Status & metrics
       isVerified: {
         type: Sequelize.BOOLEAN,

@@ -567,6 +567,7 @@ exports.updateAstrologer = async (req, res) => {
       birthDate,
       birthTime,
       birthPlace,
+      address,
       isVerified,
       isActive,
       isOnline,
@@ -659,6 +660,11 @@ exports.updateAstrologer = async (req, res) => {
       payload.birthPlace =
         birthPlace != null && String(birthPlace).trim()
           ? String(birthPlace).trim()
+          : null;
+    if (address !== undefined)
+      payload.address =
+        address != null && String(address).trim()
+          ? String(address).trim()
           : null;
     if (isVerified !== undefined)
       payload.isVerified = typeof isVerified === "boolean" ? isVerified : false;
@@ -1353,6 +1359,85 @@ exports.deleteWithdrawal = async (req, res) => {
     return res.status(code).json({
       success: false,
       message: error.message || "Error deleting withdrawal",
+    });
+  }
+};
+
+const {
+  listDeletionRequestsAdmin,
+  getDeletionRequestByIdAdmin,
+  updateDeletionRequestAdmin,
+} = require("../user/account-deletion.service");
+
+/**
+ * GET /api/v1/admin/account-deletion-requests
+ */
+exports.listAccountDeletionRequests = async (req, res) => {
+  try {
+    const status = req.query.status;
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const offset = parseInt(req.query.offset, 10) || 0;
+    const data = await listDeletionRequestsAdmin({ status, limit, offset });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error listing deletion requests",
+    });
+  }
+};
+
+/**
+ * GET /api/v1/admin/account-deletion-requests/:id
+ */
+exports.getAccountDeletionRequest = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid request id is required",
+      });
+    }
+    const data = await getDeletionRequestByIdAdmin(id);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error fetching deletion request",
+    });
+  }
+};
+
+/**
+ * PUT /api/v1/admin/account-deletion-requests/:id
+ * Body: { status: approved|rejected|cancelled, rejectionReason?, adminNotes? }
+ */
+exports.updateAccountDeletionRequest = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid request id is required",
+      });
+    }
+    const data = await updateDeletionRequestAdmin(id, req.body, req.user.id);
+    return res.status(200).json({
+      success: true,
+      message: "Deletion request updated",
+      data,
+    });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error updating deletion request",
     });
   }
 };

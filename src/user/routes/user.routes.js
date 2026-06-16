@@ -9,6 +9,10 @@ module.exports = (app) => {
   app.post("/api/v1/user/wallet/verify", userController.verifyWalletTopup);
   app.post("/api/v1/user/signup", userController.signup);
   app.post("/api/v1/user/signin", userController.login);
+  app.post(
+    "/api/v1/user/request-account-deletion",
+    userController.requestAccountDeletion
+  );
   app.put("/api/v1/user/:id/push-token", userController.updatePushToken);
   app.get("/api/v1/user/:id/push-token", userController.getPushToken);
   app.post("/api/v1/user/:id/logout", userController.logout);

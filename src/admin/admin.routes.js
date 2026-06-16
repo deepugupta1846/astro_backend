@@ -46,7 +46,7 @@ module.exports = (app) => {
   app.post(
     "/api/v1/admin/astrologers",
     requireAdmin,
-    astrologerController.create
+    astrologerController.createWithUser
   );
 
   app.get("/api/v1/admin/remedies", requireAdmin, adminController.listRemedies);
@@ -118,5 +118,21 @@ module.exports = (app) => {
     "/api/v1/admin/withdrawals/:id",
     requireAdmin,
     adminController.deleteWithdrawal
+  );
+
+  app.get(
+    "/api/v1/admin/account-deletion-requests",
+    requireAdmin,
+    adminController.listAccountDeletionRequests
+  );
+  app.get(
+    "/api/v1/admin/account-deletion-requests/:id",
+    requireAdmin,
+    adminController.getAccountDeletionRequest
+  );
+  app.put(
+    "/api/v1/admin/account-deletion-requests/:id",
+    requireAdmin,
+    adminController.updateAccountDeletionRequest
   );
 };

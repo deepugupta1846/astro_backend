@@ -3,11 +3,6 @@ const admin = require("firebase-admin");
 let initialized = false;
 
 function _readServiceAccountFromEnv() {
-  const rawJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (rawJson && rawJson.trim()) {
-    return JSON.parse(rawJson);
-  }
-
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY;
