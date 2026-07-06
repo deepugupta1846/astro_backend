@@ -5,6 +5,7 @@ const twilioClient =
     ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
     : null;
 const twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+const OTP_EXPIRY_SEC = 600;
 
 function isSendOtpOnPhoneEnabled() {
   return String(process.env.SEND_OTP_ON_PHONE || "true").toLowerCase() === "true";
@@ -91,9 +92,66 @@ async function verifyPhoneOtp(phone, countryCode = "+91", otp) {
   return { normalizedPhone, toPhone, usedMasterOtp };
 }
 
+/**
+ * Sends OTP via Twilio Verify (or returns disabled payload when SMS is off).
+ */
+async function sendPhoneOtp(phone, countryCode = "+91") {
+  if (!phone || !String(phone).trim()) {
+    throw errWithStatus("Phone number is required", 400);
+  }
+
+  const normalizedPhone = String(phone).trim();
+  const toPhone = toE164Phone(normalizedPhone, countryCode);
+  if (!toPhone) {
+    throw errWithStatus("Invalid phone number", 400);
+  }
+
+  const sendOtpOnPhone = isSendOtpOnPhoneEnabled();
+  if (!sendOtpOnPhone) {
+    return {
+      normalizedPhone,
+      expiresIn: OTP_EXPIRY_SEC,
+      sendOtpOnPhone: false,
+    };
+  }
+
+  if (!twilioClient || !twilioVerifyServiceSid) {
+    throw errWithStatus("OTP service is not configured", 500);
+  }
+
+  await twilioClient.verify.v2
+    .services(twilioVerifyServiceSid)
+    .verifications.create({
+      to: toPhone,
+      channel: "sms",
+    });
+
+  return {
+    normalizedPhone,
+    expiresIn: OTP_EXPIRY_SEC,
+    sendOtpOnPhone: true,
+  };
+}
+
+/**
+ * Returns an error message when phone belongs to a non-astrologer account, else null.
+ */
+function getAstrologerPhoneConflict(user) {
+  if (!user) return null;
+  const role = String(user.role || "user").toLowerCase();
+  if (role === "astrologer") return null;
+  if (role === "admin") {
+    return "This account cannot be used for astrologer login";
+  }
+  return "This number is already registered as a customer user. Please use a different number.";
+}
+
 module.exports = {
+  OTP_EXPIRY_SEC,
   isSendOtpOnPhoneEnabled,
   getMasterOtp,
   toE164Phone,
   verifyPhoneOtp,
+  sendPhoneOtp,
+  getAstrologerPhoneConflict,
 };

@@ -866,6 +866,66 @@ Invalid signature:
 
 ## Astrologer APIs
 
+### POST `/api/v1/astrologer/send-otp`
+
+Astrologer-only OTP flow. If the phone is already registered as a **customer** (`role: user`), returns **409** — use a different number. Existing astrologer phones may receive OTP (login).
+
+- Dummy payload:
+```json
+{
+  "phone": "9876543210",
+  "countryCode": "+91"
+}
+```
+- Success response (same shape as user send-otp):
+```json
+{
+  "success": true,
+  "message": "OTP sent successfully",
+  "data": {
+    "expiresIn": 600,
+    "sendOtpOnPhone": true
+  }
+}
+```
+- Customer phone already registered:
+```json
+{
+  "success": false,
+  "message": "This number is already registered as a customer user. Please use a different number."
+}
+```
+
+### POST `/api/v1/astrologer/verify-otp`
+
+Verifies OTP for astrologer signup/login. Response matches user `verify-otp` with `signupIntent: "astrologer"`. Creates a `users` row with `role: astrologer` when new. Does **not** create the `astrologers` profile row — use `POST /api/v1/astrologer/register` after OTP for full KYC profile.
+
+- Dummy payload:
+```json
+{
+  "phone": "9876543210",
+  "countryCode": "+91",
+  "otp": "123456"
+}
+```
+- Dummy response:
+```json
+{
+  "success": true,
+  "message": "OTP verified successfully",
+  "data": {
+    "user": {
+      "id": 12,
+      "phone": "9876543210",
+      "role": "astrologer",
+      "astrologerId": 4
+    },
+    "existingUser": true
+  }
+}
+```
+- Customer phone conflict (**409**): same message as send-otp.
+
 ### GET `/api/v1/astrologer`
 - Dummy response:
 ```json

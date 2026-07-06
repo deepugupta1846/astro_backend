@@ -2,7 +2,15 @@ const { Op } = require("sequelize");
 const db = require("../../../models");
 const Astrologer = db.astrologer;
 const User = db.user;
-const { toUserResponse } = require("../../user/controller/user.controller");
+const {
+  toUserResponse,
+  attachAstrologerProfileId,
+} = require("../../user/controller/user.controller");
+const {
+  sendPhoneOtp,
+  verifyPhoneOtp,
+  getAstrologerPhoneConflict,
+} = require("../../user/otp.service");
 
 const ID_PROOF_TYPES = [
   "aadhaar",
@@ -26,6 +34,122 @@ function toAstrologerResponse(row) {
   });
   return a;
 }
+
+/**
+ * POST /api/v1/astrologer/send-otp
+ * Astrologer signup/login OTP. Rejects phones already registered as customer users.
+ */
+exports.sendOtp = async (req, res) => {
+  try {
+    const { phone, countryCode = "+91" } = req.body;
+    const normalizedPhone = phone != null ? String(phone).trim() : "";
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+      });
+    }
+
+    const existingUser = await User.findOne({
+      where: { phone: normalizedPhone },
+    });
+    const conflict = getAstrologerPhoneConflict(existingUser);
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message: conflict,
+      });
+    }
+
+    const result = await sendPhoneOtp(normalizedPhone, countryCode);
+    if (!result.sendOtpOnPhone) {
+      return res.status(200).json({
+        success: true,
+        message: "OTP sending is disabled. Use MASTER_OTP for verification.",
+        data: {
+          expiresIn: result.expiresIn,
+          sendOtpOnPhone: false,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent successfully",
+      data: {
+        expiresIn: result.expiresIn,
+        sendOtpOnPhone: true,
+      },
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message || "Error sending OTP",
+    });
+  }
+};
+
+/**
+ * POST /api/v1/astrologer/verify-otp
+ * Verifies OTP for astrologer login/signup. Same response shape as user verify-otp
+ * with signupIntent astrologer. Blocks customer-registered phones.
+ */
+exports.verifyOtp = async (req, res) => {
+  try {
+    const { phone, countryCode = "+91", otp } = req.body;
+    const { normalizedPhone, usedMasterOtp } = await verifyPhoneOtp(
+      phone,
+      countryCode,
+      otp
+    );
+
+    let user = await User.findOne({ where: { phone: normalizedPhone } });
+    const conflict = getAstrologerPhoneConflict(user);
+    if (conflict) {
+      return res.status(409).json({
+        success: false,
+        message: conflict,
+      });
+    }
+
+    let existingUser = false;
+    if (user) {
+      existingUser = true;
+    } else {
+      user = await User.create({
+        phone: normalizedPhone,
+        countryCode: String(countryCode || "+91").trim() || "+91",
+        role: "astrologer",
+      });
+    }
+
+    if (user.role !== "admin" && String(user.role || "").toLowerCase() !== "astrologer") {
+      await user.update({ role: "astrologer" });
+      user = await User.findByPk(user.id);
+    }
+
+    const userPayload = await attachAstrologerProfileId(user);
+
+    return res.status(200).json({
+      success: true,
+      message: usedMasterOtp
+        ? "OTP verified successfully (master)"
+        : "OTP verified successfully",
+      data: {
+        user: userPayload,
+        existingUser,
+        ...(usedMasterOtp && { usedMasterOtp: true }),
+      },
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message || "Error verifying OTP",
+    });
+  }
+};
 
 /** Fields never returned in public listing (privacy / KYC). */
 const LIST_EXCLUDE_ATTRIBUTES = [
