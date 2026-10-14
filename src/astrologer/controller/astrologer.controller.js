@@ -21,6 +21,87 @@ const ID_PROOF_TYPES = [
   "other",
 ];
 
+/** Fields rejected on PUT /api/v1/astrologer/:id (admin / system only). */
+const ASTROLOGER_SELF_UPDATE_FORBIDDEN = [
+  "phone",
+  "countryCode",
+  "isVerified",
+  "isActive",
+  "walletBalance",
+  "averageRating",
+  "totalConsultations",
+  "totalReviews",
+  "isOnline",
+];
+
+function parseRequiredUserId(userId) {
+  if (userId === undefined || userId === null || userId === "") {
+    return {
+      error: { status: 400, message: "userId is required" },
+    };
+  }
+  const uid = parseInt(userId, 10);
+  if (!uid || uid <= 0) {
+    return {
+      error: { status: 400, message: "Valid userId is required" },
+    };
+  }
+  return { uid };
+}
+
+/** Ensures userId owns the astrologers row (matched by phone). */
+async function resolveOwnedAstrologer(astrologerId, userId) {
+  const id = parseInt(astrologerId, 10);
+  const parsed = parseRequiredUserId(userId);
+  if (parsed.error) {
+    return parsed;
+  }
+  const uid = parsed.uid;
+  if (!id || id <= 0) {
+    return {
+      error: {
+        status: 400,
+        message: "Valid astrologer id is required",
+      },
+    };
+  }
+
+  const astrologer = await Astrologer.findByPk(id);
+  if (!astrologer) {
+    return {
+      error: { status: 404, message: "Astrologer not found" },
+    };
+  }
+
+  const user = await User.findByPk(uid);
+  if (!user) {
+    return {
+      error: { status: 404, message: "User not found" },
+    };
+  }
+  if (String(user.role || "").toLowerCase() !== "astrologer") {
+    return {
+      error: {
+        status: 403,
+        message: "Only astrologer accounts can update astrologer profile",
+      },
+    };
+  }
+  if (
+    String(user.phone || "").trim() !==
+    String(astrologer.phone || "").trim()
+  ) {
+    return {
+      error: {
+        status: 403,
+        message: "You can only update your own astrologer profile",
+      },
+    };
+  }
+
+  return { astrologer, user };
+}
+
 function toAstrologerResponse(row) {
   const a = row.toJSON ? row.toJSON() : row;
   ["specialties", "languages", "skills"].forEach((key) => {
@@ -213,11 +294,30 @@ exports.findOne = async (req, res) => {
       });
     }
 
+    const ownerUserId = req.query.userId;
+    if (
+      ownerUserId !== undefined &&
+      ownerUserId !== null &&
+      String(ownerUserId).trim() !== ""
+    ) {
+      const owned = await resolveOwnedAstrologer(id, ownerUserId);
+      if (owned.error) {
+        return res.status(owned.error.status).json({
+          success: false,
+          message: owned.error.message,
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        data: toAstrologerResponse(owned.astrologer),
+      });
+    }
+
     const astrologer = await Astrologer.findByPk(id, {
       attributes: { exclude: LIST_EXCLUDE_ATTRIBUTES },
     });
 
-    if (!astrologer) {
+    if (!astrologer || !astrologer.isActive) {
       return res.status(404).json({
         success: false,
         message: "Astrologer not found",
@@ -244,42 +344,17 @@ exports.findOne = async (req, res) => {
  */
 exports.updateAvailability = async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    const userId = parseInt(req.body?.userId, 10);
-    if (!id || !userId) {
-      return res.status(400).json({
+    const owned = await resolveOwnedAstrologer(
+      req.params.id,
+      req.body?.userId
+    );
+    if (owned.error) {
+      return res.status(owned.error.status).json({
         success: false,
-        message: "Valid astrologer id and userId are required",
+        message: owned.error.message,
       });
     }
-
-    const astrologer = await Astrologer.findByPk(id);
-    if (!astrologer || !astrologer.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: "Astrologer not found",
-      });
-    }
-
-    const user = await User.findByPk(userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-    if (String(user.role || "").toLowerCase() !== "astrologer") {
-      return res.status(403).json({
-        success: false,
-        message: "Only astrologer accounts can update availability",
-      });
-    }
-    if (String(user.phone || "").trim() !== String(astrologer.phone || "").trim()) {
-      return res.status(403).json({
-        success: false,
-        message: "You can only update your own availability",
-      });
-    }
+    const { astrologer } = owned;
 
     const payload = {};
     if (typeof req.body.chatEnabled === "boolean") {
@@ -317,6 +392,270 @@ exports.updateAvailability = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message || "Error updating availability",
+    });
+  }
+};
+
+/**
+ * PUT /api/v1/astrologer/:id
+ * Body: { userId, ...profileFields }
+ * Astrologer self-service profile update (KYC + professional fields).
+ * Does not change phone, verification, wallet, or admin metrics.
+ */
+exports.updateProfile = async (req, res) => {
+  try {
+    const forbiddenSent = ASTROLOGER_SELF_UPDATE_FORBIDDEN.filter(
+      (key) => req.body[key] !== undefined
+    );
+    if (forbiddenSent.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot update via this route: ${forbiddenSent.join(", ")}`,
+      });
+    }
+
+    const owned = await resolveOwnedAstrologer(
+      req.params.id,
+      req.body?.userId
+    );
+    if (owned.error) {
+      return res.status(owned.error.status).json({
+        success: false,
+        message: owned.error.message,
+      });
+    }
+    const { astrologer, user } = owned;
+
+    const {
+      name,
+      email,
+      gender,
+      profileImageUrl,
+      idProofType,
+      idProofNumber,
+      idProofImageUrl,
+      idProofBackImageUrl,
+      bio,
+      experienceYears,
+      education,
+      specialties,
+      languages,
+      skills,
+      consultationFeePerMin,
+      chatEnabled,
+      callEnabled,
+      videoEnabled,
+      birthDate,
+      birthTime,
+      birthPlace,
+      address,
+    } = req.body;
+
+    const payload = {};
+
+    if (name !== undefined) {
+      const trimmed = name != null ? String(name).trim() : "";
+      if (!trimmed) {
+        return res.status(400).json({
+          success: false,
+          message: "Name cannot be empty",
+        });
+      }
+      payload.name = trimmed;
+    }
+    if (email !== undefined) {
+      payload.email =
+        email != null && String(email).trim()
+          ? String(email).trim()
+          : null;
+    }
+    if (gender !== undefined) {
+      payload.gender = ["male", "female", "other"].includes(gender)
+        ? gender
+        : null;
+    }
+    if (profileImageUrl !== undefined) {
+      payload.profileImageUrl =
+        profileImageUrl != null && String(profileImageUrl).trim()
+          ? String(profileImageUrl).trim()
+          : null;
+    }
+    if (idProofType !== undefined) {
+      const idTypeNorm =
+        idProofType != null ? String(idProofType).trim().toLowerCase() : "";
+      if (idTypeNorm && !ID_PROOF_TYPES.includes(idTypeNorm)) {
+        return res.status(400).json({
+          success: false,
+          message: `idProofType must be one of: ${ID_PROOF_TYPES.join(", ")}`,
+        });
+      }
+      payload.idProofType = idTypeNorm || null;
+    }
+    if (idProofNumber !== undefined) {
+      payload.idProofNumber =
+        idProofNumber != null && String(idProofNumber).trim()
+          ? String(idProofNumber).trim().slice(0, 64)
+          : null;
+    }
+    if (idProofImageUrl !== undefined) {
+      payload.idProofImageUrl =
+        idProofImageUrl != null && String(idProofImageUrl).trim()
+          ? String(idProofImageUrl).trim()
+          : null;
+    }
+    if (idProofBackImageUrl !== undefined) {
+      payload.idProofBackImageUrl =
+        idProofBackImageUrl != null && String(idProofBackImageUrl).trim()
+          ? String(idProofBackImageUrl).trim()
+          : null;
+    }
+    if (bio !== undefined) {
+      payload.bio =
+        bio != null && String(bio).trim() ? String(bio).trim() : null;
+    }
+    if (experienceYears !== undefined) {
+      payload.experienceYears =
+        experienceYears != null && experienceYears !== ""
+          ? Number(experienceYears)
+          : null;
+    }
+    if (education !== undefined) {
+      payload.education =
+        education != null && String(education).trim()
+          ? String(education).trim()
+          : null;
+    }
+    if (specialties !== undefined) {
+      payload.specialties = Array.isArray(specialties) ? specialties : null;
+    }
+    if (languages !== undefined) {
+      payload.languages = Array.isArray(languages) ? languages : null;
+    }
+    if (skills !== undefined) {
+      payload.skills = Array.isArray(skills) ? skills : null;
+    }
+    if (consultationFeePerMin !== undefined) {
+      payload.consultationFeePerMin =
+        consultationFeePerMin != null && consultationFeePerMin !== ""
+          ? Number(consultationFeePerMin)
+          : null;
+    }
+    if (chatEnabled !== undefined) {
+      payload.chatEnabled =
+        typeof chatEnabled === "boolean"
+          ? chatEnabled
+          : astrologer.chatEnabled;
+    }
+    if (callEnabled !== undefined) {
+      payload.callEnabled =
+        typeof callEnabled === "boolean"
+          ? callEnabled
+          : astrologer.callEnabled;
+    }
+    if (videoEnabled !== undefined) {
+      payload.videoEnabled =
+        typeof videoEnabled === "boolean"
+          ? videoEnabled
+          : astrologer.videoEnabled;
+    }
+    if (birthDate !== undefined) payload.birthDate = birthDate || null;
+    if (birthTime !== undefined) {
+      payload.birthTime =
+        birthTime != null && String(birthTime).trim()
+          ? String(birthTime).trim()
+          : null;
+    }
+    if (birthPlace !== undefined) {
+      payload.birthPlace =
+        birthPlace != null && String(birthPlace).trim()
+          ? String(birthPlace).trim()
+          : null;
+    }
+    if (address !== undefined) {
+      payload.address =
+        address != null && String(address).trim()
+          ? String(address).trim()
+          : null;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide at least one profile field to update",
+      });
+    }
+
+    if (
+      payload.chatEnabled !== undefined ||
+      payload.callEnabled !== undefined
+    ) {
+      const nextChat =
+        payload.chatEnabled !== undefined
+          ? payload.chatEnabled
+          : astrologer.chatEnabled;
+      const nextCall =
+        payload.callEnabled !== undefined
+          ? payload.callEnabled
+          : astrologer.callEnabled;
+      payload.isOnline = Boolean(nextChat || nextCall);
+    }
+
+    await astrologer.update(payload);
+
+    const userPayload = {};
+    if (payload.name !== undefined) userPayload.name = payload.name;
+    if (payload.email !== undefined) userPayload.email = payload.email;
+    if (payload.gender !== undefined) userPayload.gender = payload.gender;
+    if (payload.profileImageUrl !== undefined) {
+      userPayload.profileImageUrl = payload.profileImageUrl;
+    }
+    if (payload.birthDate !== undefined) {
+      userPayload.birthDate = payload.birthDate;
+    }
+    if (payload.birthTime !== undefined) {
+      userPayload.birthTime = payload.birthTime;
+    }
+    if (payload.birthPlace !== undefined) {
+      userPayload.birthPlace = payload.birthPlace;
+    }
+    if (payload.languages !== undefined) {
+      userPayload.languages = Array.isArray(payload.languages)
+        ? JSON.stringify(payload.languages)
+        : null;
+    }
+    if (Object.keys(userPayload).length > 0) {
+      await user.update(userPayload);
+    }
+
+    await astrologer.reload();
+    const refreshedUser = await User.findByPk(user.id);
+    const userResponse = toUserResponse(refreshedUser);
+    userResponse.astrologerId = astrologer.id;
+
+    res.status(200).json({
+      success: true,
+      message: "Astrologer profile updated",
+      data: {
+        user: userResponse,
+        astrologer: toAstrologerResponse(astrologer),
+      },
+    });
+  } catch (error) {
+    if (error.name === "SequelizeUniqueConstraintError") {
+      return res.status(409).json({
+        success: false,
+        message: "Email or unique field already in use",
+      });
+    }
+    if (error.name === "SequelizeValidationError") {
+      return res.status(400).json({
+        success: false,
+        message: error.errors?.[0]?.message || "Validation failed",
+      });
+    }
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error updating astrologer profile",
     });
   }
 };

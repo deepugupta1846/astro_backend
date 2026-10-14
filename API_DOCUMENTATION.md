@@ -944,7 +944,11 @@ Verifies OTP for astrologer signup/login. Response matches user `verify-otp` wit
 
 ### GET `/api/v1/astrologer/:id`
 
-Public astrologer profile by primary key. **Excluded from JSON:** `phone`, `email`, `idProofType`, `idProofNumber`, `idProofImageUrl`, `idProofBackImageUrl` (same privacy rule as list).
+Public astrologer profile by primary key (active astrologers only). **Excluded from JSON:** `phone`, `email`, `idProofType`, `idProofNumber`, `idProofImageUrl`, `idProofBackImageUrl` (same privacy rule as list).
+
+**Owner view (edit screen):** append query `?userId={users.id}` with the same ownership rules as `PUT /api/v1/astrologer/:id`. Returns the **full** astrologer row including KYC URLs and contact fields for the logged-in astrologer only.
+
+- Example: `GET /api/v1/astrologer/4?userId=22`
 
 - Dummy response:
 ```json
@@ -975,6 +979,83 @@ Public astrologer profile by primary key. **Excluded from JSON:** `phone`, `emai
     "isActive": true,
     "createdAt": "2026-04-01T06:00:00.000Z",
     "updatedAt": "2026-05-09T09:00:00.000Z"
+  }
+}
+```
+
+### PUT `/api/v1/astrologer/:id`
+
+Update the logged-in astrologer’s own profile (`astrologers.id` in the path). Requires **`userId`** in the body (same `users.id` from OTP verify). Ownership is verified by matching `users.phone` to `astrologers.phone` and `users.role === "astrologer"`.
+
+**Partial update:** send only fields you want to change.
+
+**Not allowed via this route:** `phone`, `countryCode`, `isVerified`, `isActive`, `walletBalance`, `averageRating`, `totalConsultations`, `totalReviews` (use admin APIs for moderation/metrics).
+
+**Response includes** full astrologer row (including KYC URLs) for the owner — unlike public `GET /api/v1/astrologer/:id`.
+
+- Dummy payload:
+```json
+{
+  "userId": 22,
+  "name": "Acharya Ravi",
+  "email": "ravi@example.com",
+  "gender": "male",
+  "profileImageUrl": "http://localhost:5000/uploads/astro/profile.jpg",
+  "bio": "Vedic astrologer with 8+ years experience.",
+  "experienceYears": 8,
+  "education": "Jyotish Visharad",
+  "specialties": ["Career", "Marriage"],
+  "languages": ["Hindi", "English"],
+  "skills": ["Vedic", "Prashna"],
+  "consultationFeePerMin": 25,
+  "videoEnabled": false,
+  "birthDate": "1990-01-10",
+  "birthTime": "06:40 AM",
+  "birthPlace": "Jaipur",
+  "address": "Jaipur, Rajasthan"
+}
+```
+- Dummy response:
+```json
+{
+  "success": true,
+  "message": "Astrologer profile updated",
+  "data": {
+    "user": {
+      "id": 22,
+      "name": "Acharya Ravi",
+      "phone": "9876543210",
+      "role": "astrologer",
+      "astrologerId": 4
+    },
+    "astrologer": {
+      "id": 4,
+      "name": "Acharya Ravi",
+      "consultationFeePerMin": 25,
+      "bio": "Vedic astrologer with 8+ years experience."
+    }
+  }
+}
+```
+- **400** — missing `userId`, empty `name`, invalid `idProofType`, or no updatable fields.
+- **403** — wrong user or not an astrologer account.
+- **404** — astrologer or user not found.
+- **409** — email / unique constraint conflict.
+
+### PATCH `/api/v1/astrologer/:id/availability`
+
+Toggle chat/call availability for the logged-in astrologer. Body: `{ "userId": 22, "chatEnabled": true, "callEnabled": false }`. Sets `isOnline` when either service is enabled.
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "message": "Availability updated",
+  "data": {
+    "id": 4,
+    "chatEnabled": true,
+    "callEnabled": false,
+    "isOnline": true
   }
 }
 ```

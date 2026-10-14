@@ -6,14 +6,8 @@ const Notification = db.notification;
 const { signUserToken } = require("../../auth/jwt.service");
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
-const twilio = require("twilio");
+const { sendPhoneOtp, verifyPhoneOtp } = require("../otp.service");
 
-const twilioClient =
-  process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
-    ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-    : null;
-const twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
-const OTP_EXPIRY_SEC = 600;
 const processedWalletPaymentIds = new Set();
 
 const razorpayClient =
@@ -26,30 +20,6 @@ const razorpayClient =
 
 function getRazorpayPublicKey() {
   return String(process.env.RAZORPAY_KEY_ID || "").trim();
-}
-
-function isSendOtpOnPhoneEnabled() {
-  return String(process.env.SEND_OTP_ON_PHONE || "true").toLowerCase() === "true";
-}
-
-function getMasterOtp() {
-  const masterRaw = process.env.MASTER_OTP;
-  return masterRaw != null && String(masterRaw).trim() !== ""
-    ? String(masterRaw).trim()
-    : null;
-}
-
-function toE164Phone(phone, countryCode = "+91") {
-  const phoneDigits = String(phone || "").replace(/\D/g, "");
-  const code = String(countryCode || "+91").trim();
-  const codeDigits = code.startsWith("+")
-    ? `+${code.slice(1).replace(/\D/g, "")}`
-    : `+${code.replace(/\D/g, "")}`;
-  if (!phoneDigits) return "";
-  if (String(phone || "").trim().startsWith("+")) {
-    return `+${String(phone).trim().slice(1).replace(/\D/g, "")}`;
-  }
-  return `${codeDigits}${phoneDigits}`;
 }
 
 async function findOrCreateUserByPhone(normalizedPhone, countryCode) {
@@ -72,53 +42,23 @@ async function findOrCreateUserByPhone(normalizedPhone, countryCode) {
 exports.sendOtp = async (req, res) => {
   try {
     const { phone, countryCode = "+91" } = req.body;
-    const sendOtpOnPhone = isSendOtpOnPhoneEnabled();
+    const result = await sendPhoneOtp(phone, countryCode);
 
-    if (!phone || !phone.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number is required",
-      });
-    }
-
-    const normalizedPhone = String(phone).trim();
-    const toPhone = toE164Phone(normalizedPhone, countryCode);
-    if (!toPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid phone number",
-      });
-    }
-
-    if (!sendOtpOnPhone) {
+    if (!result.sendOtpOnPhone) {
       return res.status(200).json({
         success: true,
         message: "OTP sending is disabled. Use MASTER_OTP for verification.",
-        data: { expiresIn: OTP_EXPIRY_SEC, sendOtpOnPhone: false },
+        data: { expiresIn: result.expiresIn, sendOtpOnPhone: false },
       });
     }
-
-    if (!twilioClient || !twilioVerifyServiceSid) {
-      return res.status(500).json({
-        success: false,
-        message: "OTP service is not configured",
-      });
-    }
-
-    await twilioClient.verify.v2
-      .services(twilioVerifyServiceSid)
-      .verifications.create({
-        to: toPhone,
-        channel: "sms",
-      });
 
     res.status(200).json({
       success: true,
       message: "OTP sent successfully",
-      data: { expiresIn: OTP_EXPIRY_SEC, sendOtpOnPhone: true },
+      data: { expiresIn: result.expiresIn, sendOtpOnPhone: true },
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Error sending OTP",
     });
@@ -131,79 +71,11 @@ exports.sendOtp = async (req, res) => {
 exports.verifyOtp = async (req, res) => {
   try {
     const { phone, countryCode = "+91", otp, signupIntent } = req.body;
-    const sendOtpOnPhone = isSendOtpOnPhoneEnabled();
-
-    if (!phone || !String(phone).trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number is required",
-      });
-    }
-
-    if (otp == null || String(otp).trim() === "") {
-      return res.status(400).json({
-        success: false,
-        message: "OTP is required",
-      });
-    }
-
-    const normalizedPhone = String(phone).trim();
-    const toPhone = toE164Phone(normalizedPhone, countryCode);
-    if (!toPhone) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid phone number",
-      });
-    }
-
-    const otpStr = String(otp).trim();
-    if (otpStr.length !== 6 || !/^\d+$/.test(otpStr)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid OTP format",
-      });
-    }
-
-    const masterOtp = getMasterOtp();
-    const usedMasterOtp = Boolean(masterOtp && otpStr === masterOtp);
-
-    if (!sendOtpOnPhone) {
-      if (!masterOtp) {
-        return res.status(500).json({
-          success: false,
-          message: "MASTER_OTP is not configured",
-        });
-      }
-      if (!usedMasterOtp) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid OTP",
-        });
-      }
-    }
-
-    if (sendOtpOnPhone && !usedMasterOtp) {
-      if (!twilioClient || !twilioVerifyServiceSid) {
-        return res.status(500).json({
-          success: false,
-          message: "OTP service is not configured",
-        });
-      }
-
-      const verification = await twilioClient.verify.v2
-        .services(twilioVerifyServiceSid)
-        .verificationChecks.create({
-          to: toPhone,
-          code: otpStr,
-        });
-
-      if (verification.status !== "approved") {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid OTP",
-        });
-      }
-    }
+    const { normalizedPhone, usedMasterOtp } = await verifyPhoneOtp(
+      phone,
+      countryCode,
+      otp
+    );
 
     const { user, existingUser } = await findOrCreateUserByPhone(
       normalizedPhone,
@@ -232,7 +104,7 @@ exports.verifyOtp = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Error verifying OTP",
     });

@@ -1,11 +1,18 @@
+const crypto = require("crypto");
 const twilio = require("twilio");
+const db = require("../../models");
+const PhoneOtp = db.phoneOtp;
 
 const twilioClient =
   process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
     ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
     : null;
-const twilioVerifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
-const OTP_EXPIRY_SEC = 600;
+
+const OTP_EXPIRY_SEC = Number(process.env.OTP_EXPIRY_SEC || 600);
+const OTP_RESEND_SEC = Number(process.env.OTP_RESEND_SEC || 60);
+const OTP_MAX_ATTEMPTS = Number(process.env.OTP_MAX_ATTEMPTS || 5);
+
+let tableReady = false;
 
 function isSendOtpOnPhoneEnabled() {
   return String(process.env.SEND_OTP_ON_PHONE || "true").toLowerCase() === "true";
@@ -16,6 +23,12 @@ function getMasterOtp() {
   return masterRaw != null && String(masterRaw).trim() !== ""
     ? String(masterRaw).trim()
     : null;
+}
+
+function getTwilioFromNumber() {
+  return String(
+    process.env.TWILIO_PHONE_NUMBER || process.env.TWILIO_FROM_NUMBER || ""
+  ).trim();
 }
 
 function toE164Phone(phone, countryCode = "+91") {
@@ -35,6 +48,30 @@ function errWithStatus(message, statusCode) {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+}
+
+function hashOtp(phone, otp) {
+  return crypto
+    .createHash("sha256")
+    .update(`${phone}:${otp}`)
+    .digest("hex");
+}
+
+function generateOtp() {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+function hashesMatch(storedHash, phone, otp) {
+  const expected = Buffer.from(hashOtp(phone, otp), "utf8");
+  const actual = Buffer.from(String(storedHash || ""), "utf8");
+  if (expected.length !== actual.length) return false;
+  return crypto.timingSafeEqual(expected, actual);
+}
+
+async function ensureOtpTable() {
+  if (tableReady || !PhoneOtp) return;
+  await PhoneOtp.sync();
+  tableReady = true;
 }
 
 /**
@@ -70,30 +107,40 @@ async function verifyPhoneOtp(phone, countryCode = "+91", otp) {
     if (!usedMasterOtp) {
       throw errWithStatus("Invalid OTP", 400);
     }
+    return { normalizedPhone, toPhone, usedMasterOtp };
   }
 
-  if (sendOtpOnPhone && !usedMasterOtp) {
-    if (!twilioClient || !twilioVerifyServiceSid) {
-      throw errWithStatus("OTP service is not configured", 500);
-    }
-
-    const verification = await twilioClient.verify.v2
-      .services(twilioVerifyServiceSid)
-      .verificationChecks.create({
-        to: toPhone,
-        code: otpStr,
-      });
-
-    if (verification.status !== "approved") {
-      throw errWithStatus("Invalid OTP", 400);
-    }
+  if (usedMasterOtp) {
+    return { normalizedPhone, toPhone, usedMasterOtp };
   }
 
-  return { normalizedPhone, toPhone, usedMasterOtp };
+  await ensureOtpTable();
+  const row = await PhoneOtp.findOne({ where: { phone: toPhone } });
+  if (!row) {
+    throw errWithStatus("OTP not found or expired. Please request a new OTP", 400);
+  }
+
+  if (new Date(row.expiresAt).getTime() < Date.now()) {
+    await row.destroy();
+    throw errWithStatus("OTP expired. Please request a new OTP", 400);
+  }
+
+  if (row.attempts >= OTP_MAX_ATTEMPTS) {
+    await row.destroy();
+    throw errWithStatus("Too many invalid attempts. Please request a new OTP", 400);
+  }
+
+  if (!hashesMatch(row.otpHash, toPhone, otpStr)) {
+    await row.update({ attempts: row.attempts + 1 });
+    throw errWithStatus("Invalid OTP", 400);
+  }
+
+  await row.destroy();
+  return { normalizedPhone, toPhone, usedMasterOtp: false };
 }
 
 /**
- * Sends OTP via Twilio Verify (or returns disabled payload when SMS is off).
+ * Generates OTP, stores a hash, and sends it as a plain Twilio SMS.
  */
 async function sendPhoneOtp(phone, countryCode = "+91") {
   if (!phone || !String(phone).trim()) {
@@ -115,16 +162,51 @@ async function sendPhoneOtp(phone, countryCode = "+91") {
     };
   }
 
-  if (!twilioClient || !twilioVerifyServiceSid) {
-    throw errWithStatus("OTP service is not configured", 500);
+  const fromNumber = getTwilioFromNumber();
+  if (!twilioClient || !fromNumber) {
+    throw errWithStatus(
+      "OTP SMS is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER",
+      500
+    );
   }
 
-  await twilioClient.verify.v2
-    .services(twilioVerifyServiceSid)
-    .verifications.create({
-      to: toPhone,
-      channel: "sms",
-    });
+  await ensureOtpTable();
+
+  const existing = await PhoneOtp.findOne({ where: { phone: toPhone } });
+  if (existing) {
+    const elapsedMs = Date.now() - new Date(existing.lastSentAt).getTime();
+    const waitMs = OTP_RESEND_SEC * 1000 - elapsedMs;
+    if (waitMs > 0) {
+      throw errWithStatus(
+        `Please wait ${Math.ceil(waitMs / 1000)} seconds before requesting another OTP`,
+        429
+      );
+    }
+  }
+
+  const otp = generateOtp();
+  const now = new Date();
+  const payload = {
+    phone: toPhone,
+    otpHash: hashOtp(toPhone, otp),
+    expiresAt: new Date(now.getTime() + OTP_EXPIRY_SEC * 1000),
+    attempts: 0,
+    lastSentAt: now,
+  };
+
+  if (existing) {
+    await existing.update(payload);
+  } else {
+    await PhoneOtp.create(payload);
+  }
+
+  await twilioClient.messages.create({
+    to: toPhone,
+    from: fromNumber,
+    body: `Your AstroLoger OTP is ${otp}. It is valid for ${Math.round(
+      OTP_EXPIRY_SEC / 60
+    )} minutes. Do not share this code.`,
+  });
 
   return {
     normalizedPhone,

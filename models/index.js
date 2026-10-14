@@ -65,6 +65,10 @@ db.accountDeletionRequest = require("../src/user/model/account_deletion_request.
   sequelize,
   Sequelize
 );
+db.phoneOtp = require("../src/user/model/phone_otp.model.js")(
+  sequelize,
+  Sequelize
+);
 
 db.astrologerWithdrawalRequest.belongsTo(db.astrologer, {
   foreignKey: "astrologerId",

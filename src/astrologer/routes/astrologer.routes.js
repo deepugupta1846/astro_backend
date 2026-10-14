@@ -8,6 +8,7 @@ module.exports = (app) => {
     "/api/v1/astrologer/:id/availability",
     astrologerController.updateAvailability
   );
+  app.put("/api/v1/astrologer/:id", astrologerController.updateProfile);
   app.get("/api/v1/astrologer/:id", astrologerController.findOne);
   app.post("/api/v1/astrologer/register", astrologerController.register);
   app.post("/api/v1/astrologer", astrologerController.create);
