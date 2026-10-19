@@ -31,17 +31,41 @@ function billableMinutesFromDuration(durationSeconds) {
   return Math.ceil(seconds / 60);
 }
 
-function calculateConsultationAmount(durationSeconds, feePerMin) {
+function calculateConsultationAmount(
+  durationSeconds,
+  feePerMin,
+  freeChatMinutes = 0
+) {
   const rate = Number(feePerMin);
   if (!Number.isFinite(rate) || rate <= 0) {
-    return { amount: 0, billableMinutes: 0, feePerMin: rate };
+    return {
+      amount: 0,
+      billableMinutes: 0,
+      feePerMin: rate,
+      freeChatMinutesApplied: 0,
+    };
   }
-  const billableMinutes = billableMinutesFromDuration(durationSeconds);
+  const rawMinutes = billableMinutesFromDuration(durationSeconds);
+  const freeApplied = Math.max(
+    0,
+    Math.min(rawMinutes, Math.floor(Number(freeChatMinutes) || 0))
+  );
+  const billableMinutes = Math.max(0, rawMinutes - freeApplied);
   if (billableMinutes <= 0) {
-    return { amount: 0, billableMinutes: 0, feePerMin: rate };
+    return {
+      amount: 0,
+      billableMinutes: 0,
+      feePerMin: rate,
+      freeChatMinutesApplied: freeApplied,
+    };
   }
   const amount = Number((billableMinutes * rate).toFixed(2));
-  return { amount, billableMinutes, feePerMin: rate };
+  return {
+    amount,
+    billableMinutes,
+    feePerMin: rate,
+    freeChatMinutesApplied: freeApplied,
+  };
 }
 
 function errWithStatus(message, statusCode) {
@@ -257,10 +281,15 @@ async function settleSessionChat(tx, params) {
     astrologerId,
     durationSeconds,
     feePerMin,
+    freeChatMinutes = 0,
   } = params;
 
   const referenceId = sessionChatReferenceId(sessionId);
-  const pricing = calculateConsultationAmount(durationSeconds, feePerMin);
+  const pricing = calculateConsultationAmount(
+    durationSeconds,
+    feePerMin,
+    freeChatMinutes
+  );
 
   if (pricing.amount <= 0) {
     return {
@@ -272,6 +301,7 @@ async function settleSessionChat(tx, params) {
           : "zero_consultation_rate",
       amount: 0,
       billableMinutes: pricing.billableMinutes,
+      freeChatMinutesApplied: pricing.freeChatMinutesApplied ?? 0,
       feePerMin: pricing.feePerMin,
       referenceId,
     };
@@ -287,6 +317,7 @@ async function settleSessionChat(tx, params) {
       sessionId,
       durationSeconds,
       billableMinutes: pricing.billableMinutes,
+      freeChatMinutesApplied: pricing.freeChatMinutesApplied ?? 0,
       feePerMin: pricing.feePerMin,
       kind: "chat",
     },
@@ -297,6 +328,7 @@ async function settleSessionChat(tx, params) {
     skipped: false,
     amount: transfer.amount,
     billableMinutes: pricing.billableMinutes,
+    freeChatMinutesApplied: pricing.freeChatMinutesApplied ?? 0,
     feePerMin: pricing.feePerMin,
     durationSeconds,
     referenceId,

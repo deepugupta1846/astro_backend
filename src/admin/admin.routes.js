@@ -100,6 +100,17 @@ module.exports = (app) => {
   app.delete("/api/v1/admin/pujas/:id", requireAdmin, adminController.deletePuja);
 
   app.get(
+    "/api/v1/admin/astrologer-policy",
+    requireAdmin,
+    adminController.getAstrologerPolicy
+  );
+  app.put(
+    "/api/v1/admin/astrologer-policy",
+    requireAdmin,
+    adminController.updateAstrologerPolicy
+  );
+
+  app.get(
     "/api/v1/admin/withdrawals",
     requireAdmin,
     adminController.listWithdrawals

@@ -866,6 +866,53 @@ Invalid signature:
 
 ## Astrologer APIs
 
+### GET `/api/v1/astrologer/policy`
+
+Platform-wide rules for astrologers (no auth). Used by the partner app and chat billing.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `freeChatMinutes` | integer | First N **billable** chat minutes free per session when chat ends (deducted before wallet settlement). |
+| `withdrawalPlatformPercent` | number | Platform fee **0–100** on withdrawal (informational on request; gross amount is debited from wallet). |
+
+- Dummy response:
+```json
+{
+  "success": true,
+  "data": {
+    "freeChatMinutes": 3,
+    "withdrawalPlatformPercent": 5,
+    "updatedAt": "2026-05-18T12:00:00.000Z"
+  }
+}
+```
+
+**Admin:** `GET` / `PUT` `/api/v1/admin/astrologer-policy` (requires admin JWT). Partial update supported.
+
+- Dummy admin update:
+```json
+{
+  "freeChatMinutes": 5,
+  "withdrawalPlatformPercent": 7.5
+}
+```
+- Dummy admin response:
+```json
+{
+  "success": true,
+  "message": "Astrologer policy updated",
+  "data": {
+    "freeChatMinutes": 5,
+    "withdrawalPlatformPercent": 7.5,
+    "updatedAt": "2026-05-18T12:05:00.000Z"
+  }
+}
+```
+
+**DB:** run `scripts/migrations/004_astrologer_policy.sql` once (or `DB_SYNC_ALTER=true` in dev).
+
+---
+
 ### POST `/api/v1/astrologer/send-otp`
 
 Astrologer-only OTP flow. If the phone is already registered as a **customer** (`role: user`), returns **409** — use a different number. Existing astrologer phones may receive OTP (login).

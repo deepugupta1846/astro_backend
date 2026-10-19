@@ -6,6 +6,11 @@ const Astrologer = db.astrologer;
 const WalletTransaction = db.walletTransaction;
 const WithdrawalRequest = db.astrologerWithdrawalRequest;
 
+const {
+  getAstrologerPolicy,
+  computeWithdrawalFeeBreakdown,
+} = require("../astrologer/astrologer-policy.service");
+
 const MIN_WITHDRAWAL_AMOUNT = 1000;
 
 function asAmount(v) {
@@ -200,9 +205,19 @@ async function createAstrologerWithdrawal(params) {
     );
 
     await tx.commit();
+    const policy = await getAstrologerPolicy();
+    const withdrawalFee = computeWithdrawalFeeBreakdown(
+      amt,
+      policy.withdrawalPlatformPercent
+    );
     return {
       withdrawal: toWithdrawalJson(await withdrawal.reload()),
       walletBalance: balanceAfter,
+      policy: {
+        freeChatMinutes: policy.freeChatMinutes,
+        withdrawalPlatformPercent: policy.withdrawalPlatformPercent,
+      },
+      withdrawalFee,
     };
   } catch (e) {
     await tx.rollback();

@@ -1242,3 +1242,20 @@ exports.createWithUser = async (req, res) => {
     });
   }
 };
+
+/**
+ * GET /api/v1/astrologer/policy
+ * Public platform rules for astrologers (free chat minutes, withdrawal fee %).
+ */
+exports.getPolicy = async (req, res) => {
+  try {
+    const { getAstrologerPolicy } = require("../astrologer-policy.service");
+    const data = await getAstrologerPolicy();
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error loading astrologer policy",
+    });
+  }
+};

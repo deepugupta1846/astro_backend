@@ -854,6 +854,8 @@ exports.createAstrologerWithdrawal = async (req, res) => {
         ...result.withdrawal,
         walletBalance: result.walletBalance,
         minWithdrawalAmount: MIN_WITHDRAWAL_AMOUNT,
+        policy: result.policy,
+        withdrawalFee: result.withdrawalFee,
       },
     });
   } catch (error) {

@@ -30,6 +30,10 @@ db.astrologer = require("../src/astrologer/model/astrologer.model.js")(
   sequelize,
   Sequelize
 );
+db.astrologerPolicy = require("../src/astrologer/model/astrologer_policy.model.js")(
+  sequelize,
+  Sequelize
+);
 db.remedy = require("../src/remedy/model/remedy.model.js")(sequelize, Sequelize);
 db.puja = require("../src/puja/model/puja.model.js")(sequelize, Sequelize);
 db.pujaBooking = require("../src/puja/model/puja_booking.model.js")(

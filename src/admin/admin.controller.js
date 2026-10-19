@@ -1441,3 +1441,45 @@ exports.updateAccountDeletionRequest = async (req, res) => {
     });
   }
 };
+
+const {
+  getAstrologerPolicy,
+  updateAstrologerPolicy,
+} = require("../astrologer/astrologer-policy.service");
+
+/**
+ * GET /api/v1/admin/astrologer-policy
+ */
+exports.getAstrologerPolicy = async (req, res) => {
+  try {
+    const data = await getAstrologerPolicy();
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Error loading astrologer policy",
+    });
+  }
+};
+
+/**
+ * PUT /api/v1/admin/astrologer-policy
+ * Body: { freeChatMinutes?, withdrawalPlatformPercent? }
+ */
+exports.updateAstrologerPolicy = async (req, res) => {
+  try {
+    const data = await updateAstrologerPolicy(req.body || {});
+    return res.status(200).json({
+      success: true,
+      message: "Astrologer policy updated",
+      data,
+    });
+  } catch (error) {
+    const code =
+      error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
+    return res.status(code).json({
+      success: false,
+      message: error.message || "Error updating astrologer policy",
+    });
+  }
+};
