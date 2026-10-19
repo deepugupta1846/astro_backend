@@ -144,7 +144,7 @@ exports.createOrGetSession = async (req, res) => {
       order: [["id", "DESC"]],
     });
 
-    let notifyAstrologer = false;
+    let notifyAstrologer = true;
     if (!session) {
       session = await ConsultationSession.create({
         customerUserId: cid,
