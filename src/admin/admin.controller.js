@@ -574,7 +574,10 @@ exports.updateAstrologer = async (req, res) => {
       averageRating,
       totalConsultations,
       totalReviews,
+      freeChatMinutes,
     } = req.body;
+
+    const { clampFreeMinutes } = require("../astrologer/astrologer-policy.service");
 
     const payload = {};
     if (name !== undefined)
@@ -643,6 +646,9 @@ exports.updateAstrologer = async (req, res) => {
         consultationFeePerMin != null && consultationFeePerMin !== ""
           ? Number(consultationFeePerMin)
           : null;
+    if (freeChatMinutes !== undefined) {
+      payload.freeChatMinutes = clampFreeMinutes(freeChatMinutes);
+    }
     if (chatEnabled !== undefined)
       payload.chatEnabled = typeof chatEnabled === "boolean" ? chatEnabled : row.chatEnabled;
     if (callEnabled !== undefined)
@@ -1464,7 +1470,7 @@ exports.getAstrologerPolicy = async (req, res) => {
 
 /**
  * PUT /api/v1/admin/astrologer-policy
- * Body: { freeChatMinutes?, withdrawalPlatformPercent? }
+ * Body: { withdrawalPlatformPercent?, freeChatMinutes? } — policy freeChatMinutes is dashboard display only
  */
 exports.updateAstrologerPolicy = async (req, res) => {
   try {

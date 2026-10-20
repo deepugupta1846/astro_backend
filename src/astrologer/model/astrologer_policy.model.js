@@ -12,7 +12,8 @@ module.exports = (sequelize, Sequelize) => {
         allowNull: false,
         defaultValue: 0,
         field: "free_chat_minutes",
-        comment: "First N billable chat minutes free per session (platform-wide)",
+        comment:
+          "Dashboard display only (API key freeChatMinutes) — NOT used for chat billing",
       },
       withdrawalPlatformPercent: {
         type: Sequelize.DECIMAL(5, 2),
@@ -24,6 +25,8 @@ module.exports = (sequelize, Sequelize) => {
     },
     {
       timestamps: true,
+      createdAt: "created_at",
+      updatedAt: "updated_at",
       freezeTableName: true,
       tableName: "astrologer_policy",
     }

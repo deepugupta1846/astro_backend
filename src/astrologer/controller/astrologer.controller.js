@@ -32,6 +32,7 @@ const ASTROLOGER_SELF_UPDATE_FORBIDDEN = [
   "totalConsultations",
   "totalReviews",
   "isOnline",
+  "freeChatMinutes",
 ];
 
 function parseRequiredUserId(userId) {
@@ -1245,7 +1246,8 @@ exports.createWithUser = async (req, res) => {
 
 /**
  * GET /api/v1/astrologer/policy
- * Public platform rules for astrologers (free chat minutes, withdrawal fee %).
+ * Global platform rules: withdrawal fee % + dashboard-only free-chat display.
+ * Billing uses each astrologer's own freeChatMinutes (admin PUT /admin/astrologers/:id).
  */
 exports.getPolicy = async (req, res) => {
   try {

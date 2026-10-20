@@ -141,6 +141,14 @@ module.exports = (sequelize, Sequelize) => {
         allowNull: true,
         comment: "Rate per minute in INR (or your base currency)",
       },
+      freeChatMinutes: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+        field: "free_chat_minutes",
+        comment:
+          "Admin-set free billable chat minutes per session for this astrologer only (0 = none)",
+      },
       chatEnabled: {
         type: Sequelize.BOOLEAN,
         defaultValue: true,

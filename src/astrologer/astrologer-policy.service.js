@@ -9,6 +9,9 @@ const DEFAULTS = {
   withdrawalPlatformPercent: 0,
 };
 
+/** Policy GET includes this so clients know this freeChatMinutes is not used for billing. */
+const FREE_CHAT_POLICY_PURPOSE = "dashboard_display_only";
+
 function clampPercent(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return 0;
@@ -24,10 +27,13 @@ function clampFreeMinutes(n) {
 function toPolicyJson(row) {
   const o = row?.toJSON ? row.toJSON() : row || {};
   return {
-    freeChatMinutes: clampFreeMinutes(o.freeChatMinutes ?? DEFAULTS.freeChatMinutes),
     withdrawalPlatformPercent: clampPercent(
       o.withdrawalPlatformPercent ?? DEFAULTS.withdrawalPlatformPercent
     ),
+    freeChatMinutes: clampFreeMinutes(
+      o.freeChatMinutes ?? DEFAULTS.freeChatMinutes
+    ),
+    freeChatMinutesPurpose: FREE_CHAT_POLICY_PURPOSE,
     updatedAt: o.updatedAt || null,
   };
 }
@@ -43,6 +49,7 @@ async function ensurePolicyRow() {
   return row;
 }
 
+/** Global platform settings (withdrawal fee + dashboard display freeChatMinutes). */
 async function getAstrologerPolicy() {
   const row = await ensurePolicyRow();
   return toPolicyJson(row);
@@ -51,18 +58,21 @@ async function getAstrologerPolicy() {
 async function updateAstrologerPolicy(payload) {
   const row = await ensurePolicyRow();
   const updates = {};
+  const body = payload || {};
 
-  if (payload.freeChatMinutes !== undefined) {
-    updates.freeChatMinutes = clampFreeMinutes(payload.freeChatMinutes);
+  if (body.freeChatMinutes !== undefined) {
+    updates.freeChatMinutes = clampFreeMinutes(body.freeChatMinutes);
   }
-  if (payload.withdrawalPlatformPercent !== undefined) {
+  if (body.withdrawalPlatformPercent !== undefined) {
     updates.withdrawalPlatformPercent = clampPercent(
-      payload.withdrawalPlatformPercent
+      body.withdrawalPlatformPercent
     );
   }
 
   if (Object.keys(updates).length === 0) {
-    const err = new Error("Provide freeChatMinutes and/or withdrawalPlatformPercent");
+    const err = new Error(
+      "Provide withdrawalPlatformPercent and/or freeChatMinutes (policy display only)"
+    );
     err.statusCode = 400;
     throw err;
   }
@@ -90,5 +100,7 @@ module.exports = {
   getAstrologerPolicy,
   updateAstrologerPolicy,
   computeWithdrawalFeeBreakdown,
+  clampFreeMinutes,
   toPolicyJson,
+  FREE_CHAT_POLICY_PURPOSE,
 };

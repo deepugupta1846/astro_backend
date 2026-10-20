@@ -14,7 +14,7 @@ const {
   settleCallConsultation,
   settleSessionChat,
 } = require("../../wallet/wallet.service");
-const { getAstrologerPolicy } = require("../../astrologer/astrologer-policy.service");
+const { clampFreeMinutes } = require("../../astrologer/astrologer-policy.service");
 
 const ConsultationSession = db.consultationSession;
 const ChatMessage = db.chatMessage;
@@ -51,6 +51,7 @@ async function astrologerBrief(astrologerId) {
       "specialties",
       "languages",
       "consultationFeePerMin",
+      "freeChatMinutes",
       "averageRating",
       "totalConsultations",
       "profileImageUrl",
@@ -72,6 +73,7 @@ async function astrologerBrief(astrologerId) {
     specialties: o.specialties,
     languages: o.languages,
     consultationFeePerMin: o.consultationFeePerMin,
+    freeChatMinutes: clampFreeMinutes(o.freeChatMinutes ?? 0),
     averageRating: o.averageRating,
     totalConsultations: o.totalConsultations,
     profileImageUrl: o.profileImageUrl,
@@ -720,14 +722,13 @@ exports.endChatSession = async (req, res) => {
     });
     let walletSettlement = null;
     if (astrologer) {
-      const policy = await getAstrologerPolicy();
       walletSettlement = await settleSessionChat(tx, {
         sessionId: session.id,
         userId: session.customerUserId,
         astrologerId: session.astrologerId,
         durationSeconds,
         feePerMin: astrologer.consultationFeePerMin,
-        freeChatMinutes: policy.freeChatMinutes,
+        freeChatMinutes: clampFreeMinutes(astrologer.freeChatMinutes ?? 0),
       });
     }
 

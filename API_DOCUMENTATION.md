@@ -868,48 +868,32 @@ Invalid signature:
 
 ### GET `/api/v1/astrologer/policy`
 
-Platform-wide rules for astrologers (no auth). Used by the partner app and chat billing.
+Global platform settings (no auth). Use on **dashboard for display only** where noted — not for wallet/chat billing.
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `freeChatMinutes` | integer | First N **billable** chat minutes free per session when chat ends (deducted before wallet settlement). |
-| `withdrawalPlatformPercent` | number | Platform fee **0–100** on withdrawal (informational on request; gross amount is debited from wallet). |
+| `withdrawalPlatformPercent` | number | Platform fee **0–100** on withdrawal (used for withdrawal fee breakdown). |
+| `freeChatMinutes` | integer | **Dashboard display only** — same key as before; **not used when ending chat.** |
+| `freeChatMinutesPurpose` | string | Always `"dashboard_display_only"`. |
 
 - Dummy response:
 ```json
 {
   "success": true,
   "data": {
-    "freeChatMinutes": 3,
     "withdrawalPlatformPercent": 5,
+    "freeChatMinutes": 3,
+    "freeChatMinutesPurpose": "dashboard_display_only",
     "updatedAt": "2026-05-18T12:00:00.000Z"
   }
 }
 ```
 
-**Admin:** `GET` / `PUT` `/api/v1/admin/astrologer-policy` (requires admin JWT). Partial update supported.
+**Admin:** `GET` / `PUT` `/api/v1/admin/astrologer-policy` — `withdrawalPlatformPercent` and/or `freeChatMinutes` (display on dashboard only).
 
-- Dummy admin update:
-```json
-{
-  "freeChatMinutes": 5,
-  "withdrawalPlatformPercent": 7.5
-}
-```
-- Dummy admin response:
-```json
-{
-  "success": true,
-  "message": "Astrologer policy updated",
-  "data": {
-    "freeChatMinutes": 5,
-    "withdrawalPlatformPercent": 7.5,
-    "updatedAt": "2026-05-18T12:05:00.000Z"
-  }
-}
-```
+**Actual free chat billing (per astrologer):** `PUT /api/v1/admin/astrologers/:id` with `"freeChatMinutes": 5`. Applied only when **that** astrologer’s chat ends. Public profile `freeChatMinutes` reflects this billing value. Astrologers cannot change billing minutes via self-service `PUT /api/v1/astrologer/:id`.
 
-**DB:** run `scripts/migrations/004_astrologer_policy.sql` once (or `DB_SYNC_ALTER=true` in dev).
+**DB:** `scripts/migrations/004_astrologer_policy.sql`, `005_astrologers_free_chat_minutes.sql`.
 
 ---
 
@@ -1606,6 +1590,7 @@ Lists notifications for the **authenticated admin user** (e.g. system alerts, ne
 ```json
 {
   "consultationFeePerMin": 30,
+  "freeChatMinutes": 5,
   "isVerified": true,
   "isActive": true,
   "isOnline": true

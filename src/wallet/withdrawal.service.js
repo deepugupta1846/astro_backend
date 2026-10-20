@@ -214,7 +214,6 @@ async function createAstrologerWithdrawal(params) {
       withdrawal: toWithdrawalJson(await withdrawal.reload()),
       walletBalance: balanceAfter,
       policy: {
-        freeChatMinutes: policy.freeChatMinutes,
         withdrawalPlatformPercent: policy.withdrawalPlatformPercent,
       },
       withdrawalFee,
