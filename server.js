@@ -35,23 +35,49 @@ if (!fs.existsSync(uploadsDir)) {
   console.log("Created uploads directory:", uploadsDir);
 }
 
+/** Sequelize models synced on startup (see models/index.js). */
+const SYNC_MODEL_NAMES = [
+  "user",
+  "astrologer",
+  "astrologerPolicy",
+  "remedy",
+  "puja",
+  "pujaBooking",
+  "kundli",
+  "notification",
+  "consultationSession",
+  "chatMessage",
+  "callLog",
+  "walletTransaction",
+  "astrologerWithdrawalRequest",
+  "accountDeletionRequest",
+  "phoneOtp",
+];
+
 const connectDb = async () => {
-  try {
-    await db.sequelize.authenticate();
-    const useAlter =
-      process.env.DB_SYNC_ALTER === "true" ||
-      (process.env.NODE_ENV !== "production" &&
-        process.env.DB_SYNC_ALTER !== "false");
-    console.log("Database connection established successfully.");
-    await db.sequelize.sync(useAlter ? { alter: true } : {});
-    if (useAlter) {
-      console.log(
-        "DB sync: alter enabled (missing columns will be added). " +
-          "Production: set DB_SYNC_ALTER=true once, or run SQL in scripts/migrations/."
-      );
-    }
-  } catch (error) {
-    console.log("Unable to connect database.", error.message);
+  await db.sequelize.authenticate();
+  console.log("Database connection established successfully.");
+
+  if (process.env.DB_SYNC === "false") {
+    console.log("DB sync skipped (DB_SYNC=false).");
+    return;
+  }
+
+  const useAlter =
+    process.env.DB_SYNC_ALTER === "true" ||
+    (process.env.NODE_ENV !== "production" &&
+      process.env.DB_SYNC_ALTER !== "false");
+
+  await db.sequelize.sync(useAlter ? { alter: true } : {});
+
+  console.log(
+    `DB sync: all tables synced (${useAlter ? "alter: true" : "create missing only"}).`
+  );
+  console.log(`DB models: ${SYNC_MODEL_NAMES.join(", ")}`);
+  if (!useAlter) {
+    console.log(
+      "Tip: set DB_SYNC_ALTER=true once to add new columns (e.g. free_chat_minutes), or run scripts/migrations/*.sql"
+    );
   }
 };
 
