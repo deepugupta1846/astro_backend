@@ -63,20 +63,19 @@ const connectDb = async () => {
     return;
   }
 
-  const useAlter =
-    process.env.DB_SYNC_ALTER === "true" ||
-    (process.env.NODE_ENV !== "production" &&
-      process.env.DB_SYNC_ALTER !== "false");
+  // alter: true can re-add UNIQUE indexes on every start (MySQL ER_TOO_MANY_KEYS on users.phone).
+  // Only enable explicitly; prefer scripts/migrations/*.sql for schema changes.
+  const useAlter = process.env.DB_SYNC_ALTER === "true";
 
   await db.sequelize.sync(useAlter ? { alter: true } : {});
 
   console.log(
-    `DB sync: all tables synced (${useAlter ? "alter: true" : "create missing only"}).`
+    `DB sync: all tables synced (${useAlter ? "alter: true — use only temporarily" : "create missing tables only"}).`
   );
   console.log(`DB models: ${SYNC_MODEL_NAMES.join(", ")}`);
   if (!useAlter) {
     console.log(
-      "Tip: set DB_SYNC_ALTER=true once to add new columns (e.g. free_chat_minutes), or run scripts/migrations/*.sql"
+      "New columns/tables: run scripts/migrations/*.sql (do not leave DB_SYNC_ALTER=true on production)."
     );
   }
 };
