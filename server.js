@@ -58,26 +58,29 @@ const connectDb = async () => {
   await db.sequelize.authenticate();
   console.log("Database connection established successfully.");
 
-  if (process.env.DB_SYNC === "false") {
-    console.log("DB sync skipped (DB_SYNC=false).");
+  if (process.env.DB_SYNC_ALTER === "true") {
+    console.warn(
+      "DB_SYNC_ALTER is ignored (alter sync disabled — it breaks users.phone indexes). Use scripts/migrations/*.sql"
+    );
+  }
+
+  const isProd = process.env.NODE_ENV === "production";
+  const syncExplicit = process.env.DB_SYNC === "true";
+  if (process.env.DB_SYNC === "false" || (isProd && !syncExplicit)) {
+    console.log(
+      isProd
+        ? "DB sync skipped in production (set DB_SYNC=true to create missing tables only)."
+        : "DB sync skipped (DB_SYNC=false)."
+    );
     return;
   }
 
-  // alter: true can re-add UNIQUE indexes on every start (MySQL ER_TOO_MANY_KEYS on users.phone).
-  // Only enable explicitly; prefer scripts/migrations/*.sql for schema changes.
-  const useAlter = process.env.DB_SYNC_ALTER === "true";
+  // Never { alter: true } — MySQL ER_TOO_MANY_KEYS on users.phone UNIQUE.
+  await db.sequelize.sync();
 
-  await db.sequelize.sync(useAlter ? { alter: true } : {});
-
-  console.log(
-    `DB sync: all tables synced (${useAlter ? "alter: true — use only temporarily" : "create missing tables only"}).`
-  );
+  console.log("DB sync: missing tables created if needed (no ALTER on existing tables).");
   console.log(`DB models: ${SYNC_MODEL_NAMES.join(", ")}`);
-  if (!useAlter) {
-    console.log(
-      "New columns/tables: run scripts/migrations/*.sql (do not leave DB_SYNC_ALTER=true on production)."
-    );
-  }
+  console.log("Schema changes: run scripts/migrations/*.sql on the database.");
 };
 
 // Routes
